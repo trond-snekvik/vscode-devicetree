@@ -1,0 +1,68 @@
+{
+    "name": "devicetree",
+    "displayName": "devicetree",
+    "description": "Code completion, syntax highlighting and linting of DeviceTree configurations",
+    "version": "0.0.1",
+    "publisher": "trond-snekvik",
+    "engines": {
+        "vscode": "^1.12.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [
+        "*"
+    ],
+    "main": "./out/src/extension",
+    "contributes": {
+        "languages": [
+            {
+                "id": "dts",
+                "aliases": [
+                    "DeviceTree"
+                ],
+                "configuration": "syntax/devicetree-language.json",
+                "extensions": [
+                    ".dts",
+                    ".dtsi",
+                    ".dts_compiled",
+                    ".overlay",
+                    ".dts.pre.tmp"
+                ],
+                "firstLine": "/dts-v1/;"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "dts",
+                "scopeName": "source.dts",
+                "path": "./syntax/dts.tmLanguage.json"
+            }
+        ],
+        "commands": [
+            {
+                "command": "extension.sayHello",
+                "title": "Hello World"
+            }
+        ]
+    },
+    "scripts": {
+        "vscode:prepublish": "tsc -p ./",
+        "compile": "tsc -watch -p ./",
+        "postinstall": "node ./node_modules/vscode/bin/install",
+        "test": "node ./node_modules/vscode/bin/test"
+    },
+    "devDependencies": {
+        "@types/find": "^0.2.1",
+        "@types/mocha": "^2.2.32",
+        "@types/node": "^6.0.40",
+        "@types/yaml": "^1.2.0",
+        "mocha": "^2.3.3",
+        "typescript": "^3.7.2",
+        "@types/vscode": "^1.38.0"
+    },
+    "dependencies": {
+        "find": "^0.3.0",
+        "yaml": "^1.7.2"
+    }
+}

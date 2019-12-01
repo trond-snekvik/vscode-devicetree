@@ -15,6 +15,7 @@ export interface PropertyType {
     type: PropertyTypeString | PropertyTypeString[];
     description?: string;
     constraint?: string;
+    isLoaded?: boolean;
 }
 
 export interface NodeType {
@@ -56,6 +57,7 @@ const standardProperties: PropertyType[] = [
         required: false,
         type: 'string-array',
         description: `The compatible property value consists of one or more strings that define the specific programming model for the device. This list of strings should be used by a client program for device driver selection. The property value consists of a concatenated list of null terminated strings, from most specific to most general. They allow a device to express its compatibility with a family of similar devices, potentially allowing a single device driver to match against several devices.\n\nThe recommended format is "manufacturer,model", where manufacturer is a string describing the name of the manufacturer (such as a stock ticker symbol), and model the model number.`,
+        isLoaded: true, // This is a lie, but it forces the compatible property to show as a completion item
     },
     {
         name: 'phandle',
@@ -386,21 +388,16 @@ export class TypeLoader {
             return undefined;
         }
 
-        // try {
-            if (load && !this.types[typeName].loaded) {
-                this.types[typeName] = this.loadYAML(typeName);
-            }
-        // } catch (e) {
-        //     console.error(e);
-        //     return undefined;
-        // }
+        if (load && !this.types[typeName].loaded) {
+            this.types[typeName] = this.loadYAML(typeName);
+        }
 
         return this.types[typeName];
     }
 
     YAMLtoNode(tree: any, baseType?: NodeType): NodeType {
         var loadedProperties: PropertyType[] = (('properties' in tree) ? Object.keys(tree['properties']).map(name => {
-            return <PropertyType>{name: name, ...tree['properties'][name]};
+            return <PropertyType>{name: name, ...tree['properties'][name], isLoaded: true};
         }) : []);
 
         var type = <NodeType>{ ...baseType, ...tree, properties: loadedProperties };
@@ -413,6 +410,9 @@ export class TypeLoader {
                 var include = this.get(typeNameFromFilename(tree.include));
                 if (include) {
                     type.properties = mergeProperties(type.properties, include.properties);
+                    // load all included tree entries that aren't in the child:
+                    var entries = Object.keys(include).filter(e => e !== 'properties' && !(e in type));
+                    entries.forEach(e => type[e] = include[e]);
                 }
             } else {
                 type.include.forEach(i => {

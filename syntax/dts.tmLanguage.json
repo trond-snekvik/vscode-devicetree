@@ -8,9 +8,7 @@
         {"include": "#root-node"},
         {"include": "#node"},
         {"include": "#label"},
-        {"include": "#node-ref"},
-        {"include": "#semicolon"},
-        {"include": "#illegal"}
+        {"include": "#node-ref"}
     ],
     "repository": {
         "preprocessor": {
@@ -56,34 +54,17 @@
             "match": "([\\w\\-]+)\\s*:",
             "name": "entity.name.type"
         },
-        "invalid-reserved-node": {
-            "begin": "(aliases|chosen|cpus|memory)\\s*{",
-            "end": "}",
-            "beginCaptures": {
-                "1": {"name": "invalid.illegal"}
-            },
-            "patterns": [
-                {"include": "#node-contents"}
-            ]
-        },
         "node-string-property": {
-            "begin": "([\\w,\\.+?#\\-]+)\\s*(=)\\s*",
-            "end": "[;}]",
-            "beginCaptures": {
+            "match": "([\\w,\\.+?#\\-]+)\\s*(=)\\s*(\".*?\")",
+            "captures": {
                 "1": {"name": "variable.property.nodestring"},
-                "2": {"name": "keyword.operator"}
+                "2": {"name": "keyword.operator"},
+                "3": {"name": "constant.language"}
             },
             "patterns": [
                 {
-                    "begin": "\"",
-                    "end": "\"",
-                    "name": "constant.language",
-                    "patterns":[
-                        {
-                            "match": "/[\\w\\-,+\\.]+(?:@[\\da-fA-F]+)?",
-                            "name": "constant.language"
-                        }
-                    ]
+                    "match": "\".*?\"",
+                    "name": "constant.language"
                 }
             ]
         },
@@ -109,9 +90,7 @@
                 {"include": "#node-ref-property"},
                 {"include": "#node-string-property"},
                 {"include": "#block-comment"},
-                {"include": "#comment"},
-                {"include": "#semicolon"},
-                {"include": "#illegal"}
+                {"include": "#comment"}
             ]
         },
         "chosen-node": {
@@ -124,9 +103,7 @@
                 {"include": "#node-ref-property"},
                 {"include": "#node-string-property"},
                 {"include": "#block-comment"},
-                {"include": "#comment"},
-                {"include": "#semicolon"},
-                {"include": "#illegal"}
+                {"include": "#comment"}
             ]
         },
         "cpus-node": {
@@ -145,27 +122,13 @@
                         "3": {"name": "constant.numeric"}
                     },
                     "patterns":[
-                        {
-                            "match": "(device_type)\\s*(=)\\s*(\"(?:(cpu)|(.*?))\")",
-                            "captures":{
-                                "1": {"name": "variable.property"},
-                                "2": {"name": "keyword.operator"},
-                                "3": {"name": "string.quoted.double"},
-                                "4": {"name": "string.quoted.double"},
-                                "5": {"name": "invalid.illegal"}
-                            }
-                        },
-                        {"include": "#properties"},
-                        {"include": "#semicolon"},
-                        {"include": "#illegal"}
+                        {"include": "#properties"}
                     ]
                 },
                 {"include": "#node"},
                 {"include": "#properties"},
                 {"include": "#block-comment"},
-                {"include": "#comment"},
-                {"include": "#semicolon"},
-                {"include": "#illegal"}
+                {"include": "#comment"}
             ]
         },
         "node-contents": {
@@ -173,13 +136,10 @@
                 {"include": "#comment"},
                 {"include": "#block-comment"},
                 {"include": "#compiler-directive"},
-                {"include": "#invalid-reserved-node"},
                 {"include": "#node-ref"},
                 {"include": "#node"},
                 {"include": "#label"},
-                {"include": "#properties"},
-                {"include": "#semicolon"},
-                {"include": "#illegal"}
+                {"include": "#properties"}
             ]
         },
         "node": {
@@ -221,8 +181,7 @@
             },
             "patterns": [
                 {"include": "#property-value"},
-                {"include": "#block-comment"},
-                {"include": "#illegal"}
+                {"include": "#block-comment"}
             ]
         },
         "flag-property": {
@@ -232,7 +191,7 @@
         "reserved-properties": {
             "patterns": [
                 {
-                    "begin": "(compatible)\\s*(=)\\s*",
+                    "begin": "(compatible|status)\\s*(=)\\s*",
                     "end": "[;}]",
                     "beginCaptures": {
                         "1": {"name": "variable.property"},
@@ -243,43 +202,7 @@
                             "match": "\"[\\w,\\.+\\-]+?\"",
                             "name": "constant.language"
                         },
-                        {"match": ","},
-                        {"include": "#illegal"}
-                    ]
-                },
-                {
-                    "begin": "(model)\\s*(=)\\s*",
-                    "end": "[;}]",
-                    "beginCaptures": {
-                        "1": {"name": "variable.property"},
-                        "2": {"name": "keyword.operator"}
-                    },
-                    "patterns": [
-                        {
-                            "match": "(\".*?\")",
-                            "captures": {
-                                "1": {"name": "string.quoted.double"},
-                                "2": {"name": "variable.property"}
-                            }
-                        },
-                        {"include": "#illegal"}
-                    ]
-                },
-                {
-                    "begin": "(phandle)\\s*(=)\\s*",
-                    "end": "[;}]",
-                    "beginCaptures": {
-                        "1": {"name": "variable.property"},
-                        "2": {"name": "keyword.operator"}
-                    },
-                    "patterns": [
-                        {
-                            "match": "<\\s*(0x[\\da-fA-F]+|\\d+)\\s*>",
-                            "captures": {
-                                "1": {"name": "constant.numeric"}
-                            }
-                        },
-                        {"include": "#illegal"}
+                        {"match": ","}
                     ]
                 },
                 {
@@ -291,46 +214,9 @@
                     },
                     "patterns": [
                         {
-                            "match": "\"(okay|disabled|reserved|fail|fail-.*?)\"",
+                            "match": "\".*\"",
                             "name": "constant.language"
-                        },
-                        {"include": "#illegal"}
-                    ]
-                },
-                {
-                    "begin": "(#address-cells|#size-cells)\\s*(=)\\s*",
-                    "end": "[;}]",
-                    "beginCaptures": {
-                        "1": {"name": "variable.property"},
-                        "2": {"name": "keyword.operator"}
-                    },
-                    "patterns": [
-                        {
-                            "match": "<\\s*(0x[\\da-fA-F]+|\\d+)\\s*>",
-                            "captures": {
-                                "1": {"name": "constant.numeric"}
-                            }
-                        },
-                        {"include": "#illegal"}
-                    ]
-                },
-                {
-                    "begin": "(reg)\\s*(=)\\s*",
-                    "end": "[;}]",
-                    "beginCaptures": {
-                        "1": {"name": "variable.property"},
-                        "2": {"name": "keyword.operator"}
-                    },
-                    "patterns": [
-                        {"include": "#clamped-value"},
-                        {
-                            "match": "<\\s*(0x[\\da-fA-F]+\\s+|\\d+\\s+)*(0x[\\da-fA-F]+|\\d+)\\s*>",
-                            "captures": {
-                                "1": {"name": "constant.numeric"},
-                                "2": {"name": "constant.numeric"}
-                            }
-                        },
-                        {"include": "#illegal"}
+                        }
                     ]
                 }
             ]
@@ -342,8 +228,7 @@
                 {"include": "#uint8-array"},
                 {"include": "#block-comment"},
                 {"include": "#comment"},
-                {"match": ","},
-                {"include": "#illegal"}
+                {"match": ","}
             ]
         },
         "number": {
@@ -354,11 +239,10 @@
             "begin": "<",
             "end": ">",
             "patterns":[
-                {"include": "#expression"},
-                {"include": "#number"},
                 {"include": "#ref"},
+                {"include": "#paren-expr"},
+                {"include": "#number"},
                 {"include": "#block-comment"},
-                {"include": "#illegal"},
                 {"match": ";", "name": "invalid.illegal"}
             ]
         },
@@ -366,7 +250,7 @@
             "match": "(&)([\\w\\-]+)",
             "captures": {
                 "1": {"name": "keyword.operator"},
-                "2": {"name": "support.variable"}
+                "2": {"name": "support.class"}
             }
         },
         "string": {
@@ -381,16 +265,8 @@
                     "match": "[\\da-fA-F]{2}",
                     "name": "constant.numeric"
                 },
-                {"include": "#block-comment"},
-                {"include": "#illegal"}
+                {"include": "#block-comment"}
             ]
-        },
-        "illegal": {
-            "match": "[^\\s;]+",
-            "name": "invalid.illegal"
-        },
-        "semicolon": {
-            "match": ";"
         },
         "expression": {
             "patterns": [

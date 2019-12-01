@@ -13,6 +13,11 @@
     "activationEvents": [
         "*"
     ],
+    "icon": "./doc/devicetree-icon-white.png",
+    "repository": {
+        "url": "https://www.github.com/trond-snekvik/vscode-devicetree",
+        "type": "git"
+    },
     "main": "./out/src/extension",
     "contributes": {
         "languages": [
@@ -58,8 +63,7 @@
         "@types/node": "^6.0.40",
         "@types/yaml": "^1.2.0",
         "mocha": "^2.3.3",
-        "typescript": "^3.7.2",
-        "@types/vscode": "^1.38.0"
+        "typescript": "^3.7.2"
     },
     "dependencies": {
         "find": "^0.3.0",

@@ -437,6 +437,7 @@ export class Parser {
 
             var nodeMatch = state.match(/^((?:[\w\-]+:\s+)*)([\w,\._+\-]+)(?:@([\da-fA-F]+))?\s*{/);
             if (nodeMatch) {
+
                 var node = new Node(nodeMatch[2],
                     nodeMatch[3],
                     nodeStack.length > 0 ? nodeStack[nodeStack.length - 1].node : undefined);
@@ -447,6 +448,19 @@ export class Parser {
                     this.nodes[node.path] = node;
                 }
 
+                var labels = nodeMatch[1].split(':').map(l => l.trim()).filter(l => l.length > 0);
+                // find existing alias for this node:
+                var existingNode: Node;
+                labels.find(l => {
+                    existingNode = this.nodes['&' + l];
+                    return !!existingNode;
+                });
+
+                if (existingNode) {
+                    node.entries.push(...existingNode.entries);
+                    delete this.nodes[existingNode.name];
+                }
+
                 var entry = new NodeEntry(
                     new OffsetRange(doc, offset, nodeMatch[0].length),
                     node,
@@ -454,7 +468,7 @@ export class Parser {
                         offset + (nodeMatch[1] ? nodeMatch[1].length : 0),
                         nodeMatch[2].length + (nodeMatch[3] ? nodeMatch[3].length + 1 : 0)));
 
-                entry.labels.push(...nodeMatch[1].split(':').map(l => l.trim()).filter(l => l.length > 0));
+                entry.labels.push(...labels);
                 node.entries.push(entry);
 
                 if (nodeStack.length === 0) {
@@ -476,8 +490,9 @@ export class Parser {
             if (nodeRefMatch) {
                 var node = this.getNode(nodeRefMatch[2]);
                 if (!node) {
-                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset, nodeRefMatch[0].length).toRange(), `Unknown label ${nodeRefMatch[2]}`, vscode.DiagnosticSeverity.Error));
-                    continue;
+                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset + nodeRefMatch[1].length, nodeRefMatch[2].length).toRange(), `Unknown label ${nodeRefMatch[2]}`, vscode.DiagnosticSeverity.Error));
+                    node = new Node(nodeRefMatch[2]);
+                    this.nodes[node.name] = node;
                 }
 
                 var entry = new NodeEntry(

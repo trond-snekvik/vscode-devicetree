@@ -6,7 +6,7 @@ import * as glob from 'glob';
 import { readFileSync } from 'fs';
 
 
-var appendPropSnippet = (p: types.PropertyType, snippet: vscode.SnippetString, parent?: parser.Node, parentType?: types.NodeType, node?: parser.Node) => {
+function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString, parent?: parser.Node, parentType?: types.NodeType, node?: parser.Node) {
     switch (p.type) {
         case 'boolean':
             snippet.appendText(p.name);
@@ -133,35 +133,17 @@ function getPHandleCells(propname: string, parent?: parser.Node): parser.Propert
     }
 }
 
-// class AddMissingCommand implements vscode.Command {
-//     title: string;
-//     command: string;
-//     arguments?: [parser.NodeEntry, types.PropertyType];
-
-//     constructor(entry: parser.NodeEntry, propType: types.PropertyType) {
-//         this.title = 'Add missing property';
-//         this.command = 'devicetree:addMissing';
-//         this.arguments = [entry, propType];
-//     }
-// }
-
 class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvider, vscode.HoverProvider, vscode.CompletionItemProvider, vscode.SignatureHelpProvider, vscode.DocumentRangeFormattingEditProvider {
     parser: parser.Parser;
     diags: vscode.DiagnosticCollection;
     types: types.TypeLoader;
 
-    actions: {[filename: string]: vscode.CodeAction[] };
-
     constructor(context: vscode.ExtensionContext) {
         this.parser = new parser.Parser();
         this.types = new types.TypeLoader();
         this.diags = vscode.languages.createDiagnosticCollection('Devicetree');
-        this.actions = {};
         vscode.workspace.workspaceFolders.forEach(f => this.types.addFolder(f.uri.fsPath + '/dts/bindings'));
 
-        context.subscriptions.push(vscode.commands.registerCommand('devicetree:addMissing', this.addMissing, this));
-
-        // this.parseDoc(vscode.window.activeTextEditor.document);
         this.setDoc(vscode.window.activeTextEditor.document)
         context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => this.setDoc(editor.document)));
         context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(doc => this.setDoc(doc)));
@@ -189,7 +171,6 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         }
 
         this.parser = new parser.Parser();
-        this.actions = {};
 
         var dir = document.uri.fsPath.replace(/[\\/][^\\/]+$/, '').replace(/\\/g, '/');
         var docs = glob.sync('**/*.dts_compiled', { cwd: dir + '/build' });
@@ -368,14 +349,9 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                         }
                     }
                 } else if (propType.required) {
-                    // var status = props.find(p => p.name === 'status');
-                    // var diag = new vscode.Diagnostic(entry.nameRange.toRange(), `Property "${propType.name}" is required`, (status && status.value.raw === 'okay') ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Information);
-                    // diags.push(diag);
-                    // this.actions[doc.uri.fsPath] = this.actions[doc.uri.fsPath] || [];
-                    // var action = new vscode.CodeAction(`Add property ${propType.name}`, vscode.CodeActionKind.RefactorRewrite);
-                    // action.diagnostics = [diag];
-                    // action.command = new AddMissingCommand(entry, propType);
-                    // this.actions[doc.uri.fsPath].push()
+                    var status = props.find(p => p.name === 'status');
+                    var diag = new vscode.Diagnostic(entry.nameRange.toRange(), `Property "${propType.name}" is required`, (status && status.value.raw === 'okay') ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Information);
+                    diags.push(diag);
                 }
             });
 
@@ -602,33 +578,6 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
         var lineRange = new vscode.Range(position.line, 0, position.line, 999999);
         var line = document.getText(lineRange);
-        // var indent =
-        // var replaceRange: vscode.Range;
-        // if (line.indexOf('{') >= 0) {
-        //     // replace the entire node
-        //     var text = document.getText(new vscode.Range(position.line, 0, position.line + 200, 0));
-        //     var match;
-        //     var level = 0;
-        //     var length = 0;
-        //     while (match = text.match(/^.*?([{}])/)) {
-        //         if (match[1] === '{') {
-        //             level++;
-        //         } else {
-        //             level--;
-        //         }
-        //         length += match[0].length;
-        //         text = text.slice(match[0].length);
-
-        //         if (level === 0) {
-        //             match = text.match(/.*?;/);
-        //             length += match ? match[0].length : 0;
-        //             break;
-        //         }
-        //     }
-        //     replaceRange = new vscode.Range(lineRange.start, document.positionAt(document.offsetAt(lineRange.start) + length));
-        // } else {
-        //     replaceRange = lineRange;
-        // }
 
         var propValueTemplate = (value: string, propType: types.PropertyTypeString | types.PropertyTypeString[]) => {
             if (Array.isArray(propType)) {

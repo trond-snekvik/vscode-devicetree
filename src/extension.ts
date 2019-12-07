@@ -658,8 +658,6 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                     })
                 }
             }
-
-            return [];
         }
 
         var nodeProps = node.properties();

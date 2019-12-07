@@ -739,7 +739,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         if (!prop) {
             return;
         }
-        var parentType = this.types.nodeType(prop[0].parent);
+        var parentType = prop[0].parent && this.types.nodeType(prop[0].parent);
         var nodeType = this.types.nodeType(prop[0], parentType);
         if (!nodeType) {
             return;

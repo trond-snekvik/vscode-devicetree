@@ -57,7 +57,7 @@ const standardProperties: PropertyType[] = [
         required: false,
         type: 'string-array',
         description: `The compatible property value consists of one or more strings that define the specific programming model for the device. This list of strings should be used by a client program for device driver selection. The property value consists of a concatenated list of null terminated strings, from most specific to most general. They allow a device to express its compatibility with a family of similar devices, potentially allowing a single device driver to match against several devices.\n\nThe recommended format is "manufacturer,model", where manufacturer is a string describing the name of the manufacturer (such as a stock ticker symbol), and model the model number.`,
-        isLoaded: true, // This is a lie, but it forces the compatible property to show as a completion item
+        isLoaded: true, // This is a lie, but it forces the property to show as a completion item
     },
     {
         name: 'phandle',
@@ -70,7 +70,8 @@ const standardProperties: PropertyType[] = [
         type: 'string',
         required: false,
         enum: ['okay', 'disabled', 'reserved', 'fail', 'fail-sss'],
-        description: 'The status property indicates the operational status of a device.'
+        description: 'The status property indicates the operational status of a device.',
+        isLoaded: true, // This is a lie, but it forces the property to show as a completion item
     },
     {
         name: 'clock-frequency',

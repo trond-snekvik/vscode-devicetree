@@ -717,7 +717,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
         var props = type.properties;
         if (!document.getWordRangeAtPosition(position)) {
-            props = props.filter(p => p.name === 'status' || !(p.isLoaded || nodeProps.find(pp => pp.name === p.name)));
+            props = props.filter(p => (p.name !== '#size-cells') && (p.name !== '#address-cells') && p.isLoaded && !nodeProps.find(pp => pp.name === p.name));
         }
 
         var propCompletions = props

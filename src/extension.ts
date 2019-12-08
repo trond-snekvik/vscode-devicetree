@@ -17,6 +17,33 @@ function getConfig(variable: string) {
     return undefined;
 }
 
+function getBindingDirs(): string[] {
+    var dirs = getConfig('bindings') as string[];
+    var paths = [];
+    dirs.forEach(d => {
+        var variable = d.match(/^\${(workspaceFolder)(?::(.+?))}/);
+        if (variable) {
+            if (vscode.workspace.workspaceFolders.length === 0) {
+                paths.push(vscode.env.appRoot);
+                return;
+            }
+
+            if (variable[2]) {
+                paths.push(...vscode.workspace.workspaceFolders.filter(f => f.name === variable[2]).map(w => d.replace(variable[0], w.uri.fsPath)));
+                return;
+            }
+        }
+
+        if (path.isAbsolute(d)) {
+            paths.push(d);
+        } else {
+            paths.push(...vscode.workspace.workspaceFolders.map(w => path.resolve(w.uri.fsPath, d)));
+        }
+    });
+
+    return paths;
+}
+
 function getAutoIncludes(dir: string): string[] {
     var patterns = getConfig('autoincludes') as string[];
     patterns = patterns.map(p => {
@@ -179,7 +206,9 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         this.parser = new parser.Parser();
         this.types = new types.TypeLoader();
         this.diags = vscode.languages.createDiagnosticCollection('Devicetree');
-        vscode.workspace.workspaceFolders.forEach(f => this.types.addFolder(f.uri.fsPath + '/dts/bindings'));
+        var bindingDirs = getBindingDirs();
+        bindingDirs.forEach(d => this.types.addFolder(d));
+        console.log(`Found ${Object.keys(this.types.types).length} bindings in ${bindingDirs.join(', ')}`);
 
         this.setDoc(vscode.window.activeTextEditor.document)
         context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => this.setDoc(editor.document)));

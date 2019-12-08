@@ -52,6 +52,11 @@
                         "type": "array",
                         "description": "List of glob patterns for files that are automatically included and parsed before the open file. May include VSCode variables, like ${workspaceFolder}. Defaults to ./build/**/*.dts_compiled",
                         "default": ["./build/**/*.dts_compiled"]
+                    },
+                    "devicetree.bindings": {
+                        "type": "array",
+                        "description": "List of directories containing binding descriptors. Relative paths are executed from each workspace. Defaults to dts/bindings",
+                        "default": ["dts/bindings"]
                     }
                 }
             }

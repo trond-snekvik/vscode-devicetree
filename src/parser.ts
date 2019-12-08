@@ -126,7 +126,7 @@ function parsePropValue(value: string, range: OffsetRange, diags: vscode.Diagnos
     }
 
     if (elems.length === 0) {
-        diags.push(new vscode.Diagnostic(new vscode.Range(range.doc.positionAt(range.start), range.doc.positionAt(offset)), `Expected property value`, vscode.DiagnosticSeverity.Error));
+        diags.push(new vscode.Diagnostic(new vscode.Range(range.doc.positionAt(range.start), range.doc.positionAt(range.start + state.offset)), `Expected property value`, vscode.DiagnosticSeverity.Error));
     }
 
     return elems;

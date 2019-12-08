@@ -53,7 +53,7 @@ function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString,
             var cells = getCells(p.name, parent);
             if (cells) {
                 cells.forEach((c, i) => {
-                    if (node && i === 0 && p.name === 'reg' && node.address !== undefined) {
+                    if (node && i === 0 && p.name === 'reg' && !isNaN(node.address)) {
                         snippet.appendPlaceholder(`0x${node.address.toString(16)}`);
                     } else {
                         snippet.appendPlaceholder(c);

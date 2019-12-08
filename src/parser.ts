@@ -509,6 +509,13 @@ export class Parser {
                 continue;
             }
 
+
+            var preprocessorDirective = state.match(/^#(include|define|include_next|if|else|endif)\b.*?[^\\]\r?\n/);
+            if (preprocessorDirective) {
+                diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset, preprocessorDirective[0].length).toRange(), `C preprocessor directives are not supported`, vscode.DiagnosticSeverity.Warning));
+                continue;
+            }
+
             var propMatch = state.match(/^((?:[\w\-]+:\s+)*)([#?\w,\._+\-]+)(?:\s*=\s*([^;{}]+))?\s*/);
             if (propMatch) {
                 if (nodeStack.length > 0) {

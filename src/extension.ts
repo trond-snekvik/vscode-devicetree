@@ -4,7 +4,44 @@ import * as parser from './parser';
 import * as types from './types';
 import * as glob from 'glob';
 import { readFileSync } from 'fs';
+import * as path from 'path';
 
+
+function getConfig(variable: string) {
+    var config = vscode.workspace.getConfiguration('devicetree');
+
+    var result = config.inspect(variable);
+    if (result) {
+        return result.workspaceFolderValue || result.workspaceValue || result.globalValue || result.defaultValue;
+    }
+    return undefined;
+}
+
+function getAutoIncludes(dir: string): string[] {
+    var patterns = getConfig('autoincludes') as string[];
+    patterns = patterns.map(p => {
+        return p.replace(/\${(.+?)}/g, (fullMatch: string, variable: string) => {
+            if (variable.startsWith('workspaceFolder')) {
+                if (vscode.workspace.workspaceFolders.length === 0) {
+                    return '';
+                }
+
+                var parts = variable.split(':');
+                var workspace = vscode.workspace.workspaceFolders.find(f => parts.length === 1 || f.name === parts[1]);
+                return workspace ? workspace.uri.fsPath : '';
+            }
+
+            if (['file', 'relativeFile', 'relativeFileDirname', 'fileDirname'].indexOf(variable) >= 0 &&
+                vscode.window.activeTextEditor &&
+                vscode.window.activeTextEditor.document) {
+                return vscode.window.activeTextEditor.document.uri.fsPath.replace(/[^\/\\]+$/, '');
+            }
+
+            return fullMatch;
+        });
+    })
+    return glob.sync('{' + patterns.join(',') + '}', {cwd: dir, absolute: true, nosort: true}).map(p => path.resolve(dir, p));
+}
 
 function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString, parent?: parser.Node, parentType?: types.NodeType, node?: parser.Node) {
     switch (p.type) {
@@ -146,7 +183,6 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
         this.setDoc(vscode.window.activeTextEditor.document)
         context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => this.setDoc(editor.document)));
-        context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(doc => this.setDoc(doc)));
         context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(change => this.parseDoc(change.document)));
     }
 
@@ -173,10 +209,11 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         this.parser = new parser.Parser();
 
         var dir = document.uri.fsPath.replace(/[\\/][^\\/]+$/, '').replace(/\\/g, '/');
-        var docs = glob.sync('**/*.dts_compiled', { cwd: dir + '/build' });
+
+        var docs = getAutoIncludes(dir);
 
         Promise.all(docs.map(d => {
-            return vscode.workspace.openTextDocument(dir + '/build/' + d).then(doc => this.parseDoc(doc));
+            return vscode.workspace.openTextDocument(d).then(doc => this.parseDoc(doc));
         })).then(_ => {
             this.parseDoc(document);
         });

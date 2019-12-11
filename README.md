@@ -21,6 +21,10 @@ The input paths for the DeviceTree extension can be configured:
 * `devicetree.autoincludes`: An array of dts file patterns resolving to file to parse before the currently open file. This path is relative to the current file, and defaults to `./build/**/*.dts_compiled`, which is the default location of Zephyr RTOS DeviceTree output, relative to the application's CMakeLists.txt location. To get proper completion in the Zephyr project override files for your application, run CMake for your application at least once before opening the override file.
 * `devicetree.bindings`: Array of directories in which the DTS binding files are located. Binding files are yaml-files in the format specified by the [Zephyr DeviceTree binding guide](https://docs.zephyrproject.org/latest/guides/dts/index.html#devicetree-bindings). Relative paths are resolved from the root of every open workspace. Defaults to `./dts/bindings`.
 
+## Parsing order
+
+The extension will parse the included files first, then the main file. When opening the first dts file, this becomes the active main file. Changing focus to a different file will make this the new main file, unless it's part of the inclusions for the previously focused file. The intent is to operate with a base set of include files that the active file (typically an overlay file) includes.
+
 ## Known Issues
 
 C preprocessor defines and statements are not supported, meaning raw dts and dtsi files won't be processed correctly. Use the preprocessed build output files instead.

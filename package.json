@@ -2,7 +2,7 @@
     "name": "devicetree",
     "displayName": "devicetree",
     "description": "Code completion, syntax highlighting and linting of DeviceTree configurations",
-    "version": "0.0.1",
+    "version": "1.0.0",
     "publisher": "trond-snekvik",
     "engines": {
         "vscode": "^1.12.0"
@@ -13,7 +13,7 @@
     "activationEvents": [
         "*"
     ],
-    "icon": "./doc/devicetree-icon-white.png",
+    "icon": "doc/devicetree-icon-white.png",
     "repository": {
         "url": "https://www.github.com/trond-snekvik/vscode-devicetree",
         "type": "git"

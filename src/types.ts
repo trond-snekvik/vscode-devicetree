@@ -1,5 +1,6 @@
-import * as yaml from 'yaml';
+import * as yaml from 'js-yaml';
 import * as glob from 'glob';
+import * as vscode from 'vscode';
 import { readFileSync, fstat } from 'fs';
 import { Node, Property } from './parser';
 import { Diagnostic, DiagnosticSeverity } from 'vscode';
@@ -389,7 +390,7 @@ export class TypeLoader {
             return undefined;
         }
 
-        if (load && !this.types[typeName].loaded) {
+        if (load && !this.types[typeName]?.loaded) {
             this.types[typeName] = this.loadYAML(typeName);
         }
 
@@ -434,12 +435,20 @@ export class TypeLoader {
         return type;
     }
 
-    loadYAML(name: string): NodeType {
+    loadYAML(name: string): NodeType | null {
         var type = this.types[name];
-        var contents = readFileSync(type.filename, 'utf-8');
-        var tree = yaml.parse(contents);
+        if (!type) {
+            return null;
+        }
 
-        return this.YAMLtoNode(tree, type);
+        var contents = readFileSync(type.filename, 'utf-8');
+        try {
+            var tree = yaml.load(contents);
+            // var tree = yaml.parse(contents, {mapAsMap: true});
+            return this.YAMLtoNode(tree, type);
+        } catch (e) {
+            vscode.window.showWarningMessage(`Invalid type file "${name}.yaml": ${e}`);
+        }
     }
 
 

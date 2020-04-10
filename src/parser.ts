@@ -27,6 +27,12 @@ function parsePropValue(value: string, range: OffsetRange, diags: vscode.Diagnos
             continue;
         }
 
+        var reference = state.match(/^&([\w\-]+)/);
+        if (reference) {
+            elems.push(<PHandle>{node: reference[1]});
+            continue;
+        }
+
         var string = state.match(/^"(.*?)"/);
         if (string) {
             elems.push(string[1]);
@@ -480,7 +486,7 @@ export class Parser {
                 }
                 nodeStack.push(entry);
 
-                if (nodeMatch[3] && nodeMatch[3].startsWith('0')) {
+                if (nodeMatch[3] && nodeMatch[3].length > 1 && nodeMatch[3].startsWith('0')) {
                     diags.push(new vscode.Diagnostic(entry.nameRange.toRange(), `Address should not start with leading 0's`, vscode.DiagnosticSeverity.Warning));
                 }
                 continue;
@@ -591,7 +597,8 @@ export class Parser {
 
     getPropertyAt(pos: vscode.Position, doc: vscode.TextDocument): [Node, Property] | undefined {
         var node = this.getNodeAt(pos, doc);
-        var prop = node.properties().find(p => p.range.doc.uri.fsPath === doc.uri.fsPath && p.range.toRange().contains(pos));
+
+        var prop = node?.properties().find(p => p.range.doc.uri.fsPath === doc.uri.fsPath && p.range.toRange().contains(pos));
         if (prop) {
             return [node, prop];
         }

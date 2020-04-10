@@ -67,7 +67,7 @@ function getAutoIncludes(dir: string): string[] {
             return fullMatch;
         });
     })
-    return glob.sync('{' + patterns.join(',') + '}', {cwd: dir, absolute: true, nosort: true}).map(p => path.resolve(dir, p));
+    return glob.sync('{' + patterns.join(',') + ',}', {cwd: dir, absolute: true, nosort: true}).map(p => path.resolve(dir, p));
 }
 
 function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString, parent?: parser.Node, parentType?: types.NodeType, node?: parser.Node) {
@@ -210,13 +210,15 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         bindingDirs.forEach(d => this.types.addFolder(d));
         console.log(`Found ${Object.keys(this.types.types).length} bindings in ${bindingDirs.join(', ')}`);
 
-        this.setDoc(vscode.window.activeTextEditor.document)
+        if (vscode.window.activeTextEditor) {
+            this.setDoc(vscode.window.activeTextEditor.document)
+        }
         context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => this.setDoc(editor.document)));
         context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(change => this.parseDoc(change.document)));
     }
 
     addMissing(entry: parser.NodeEntry, propType: types.PropertyType) {
-        if (vscode.window.activeTextEditor.document.uri.fsPath !== entry.range.doc.uri.fsPath) {
+        if (!vscode.window.activeTextEditor || vscode.window.activeTextEditor.document.uri.fsPath !== entry.range.doc.uri.fsPath) {
             return;
         }
         var indent = vscode.window.activeTextEditor.options.insertSpaces ? ' '.repeat(vscode.window.activeTextEditor.options.tabSize as number) : '\t';
@@ -400,6 +402,14 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                                 }
                             }
 
+                        } else if (prop.name === 'status') {
+                            // Kind of intrusive? Also needs to go on every entry for this node.
+                            // if (prop.value.value === 'disabled') {
+                            //     var diag = new vscode.Diagnostic(entry.range.toRange(), `Disabled`, vscode.DiagnosticSeverity.Hint);
+                            //     diag.tags = [vscode.DiagnosticTag.Unnecessary];
+                            //     diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(prop.range.doc.uri, prop.range.toRange()), `Disabled here`)];
+                            //     diags.push(diag);
+                            // }
                         } else if (propType.type === 'phandle-array' && Array.isArray(prop.value.value)) {
                             var c = getPHandleCells(prop.name, node.parent);
                             if (c) {
@@ -519,7 +529,12 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             var expanded = `${node.fullName} {`;
 
             expanded += node.uniqueProperties().map(p => `\n\t${p.toString()};`).join('');
-            expanded += node.children().map(c => `\n\t${c.name} { /* ... */ };`).join('');
+            expanded += node.children().reduce((array, curr) => {
+                if (!array.find(c => c.name === curr.name)) {
+                    array.push(curr);
+                }
+                return array;
+            }, new Array<parser.Node>()).map(c => `\n\t${c.name} { /* ... */ };`).join('');
             expanded += '\n};';
 
             return new vscode.Hover([new vscode.MarkdownString('`' + node.path + '`'), {language: 'dts', value: expanded}], bundle[0]);
@@ -538,11 +553,27 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         var type = this.types.nodeType(node, node.parent && this.types.nodeType(node.parent));
         var prop = type.properties.find(p => p.name === symbol);
         if (prop) {
-            var results: vscode.MarkedString[] = [new vscode.MarkdownString('type: `' + (Array.isArray(prop.type) ? prop.type.join('`, `') : prop.type) + '`')];
+            var results: vscode.MarkedString[] = [];
             if (prop.description) {
                 results.push(new vscode.MarkdownString(prop.description));
             }
+            results.push(new vscode.MarkdownString('type: `' + (Array.isArray(prop.type) ? prop.type.join('`, `') : prop.type) + '`'));
             return new vscode.Hover(results, word);
+        }
+
+        var entry = node.entries.find(e => e.nameRange.contains(position, document));
+        if (entry) {
+            var results: vscode.MarkedString[] = [];
+            if (type.title) {
+                results.push(new vscode.MarkdownString(type.title));
+            }
+            if (type.description) {
+                results.push(new vscode.MarkdownString(type.description));
+            }
+
+            results.push(new vscode.MarkdownString('`' + node.path + '`'));
+
+            return new vscode.Hover(results, word)
         }
     }
 
@@ -551,7 +582,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             var range = document.getWordRangeAtPosition(position, /[\w\-\.,]+\.ya?ml/);
             var text = document.getText(range);
             if (text) {
-                var type = Object.keys(this.types.types).map(t => this.types.types[t]).find(t => t.filename.match(new RegExp('.*/' + text)));
+                var type = Object.keys(this.types.types).map(t => this.types.types[t]).find(t => t?.filename.match(new RegExp('.*/' + text)));
                 if (type) {
                     return new vscode.Location(vscode.Uri.file(type.filename), new vscode.Position(0, 0));
                 }
@@ -580,7 +611,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             }
 
             if (property[1].name === 'compatible') {
-                var type = this.types.get(symbol);
+                var type = this.types.nodeType(property[0]);
                 if (type && type.filename.length > 0) {
                     return new vscode.Location(vscode.Uri.file(type.filename), new vscode.Position(0, 0));
                 }
@@ -716,7 +747,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                         if (!braces) {
                             completion.insertText = propValueTemplate(t, 'string');
                         }
-                        if (this.types.types[t].loaded) {
+                        if (this.types.types[t]?.loaded) {
                             completion.detail = this.types.types[t].title;
                             completion.documentation = this.types.types[t].description;
                         }
@@ -816,6 +847,16 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             return;
         }
 
+        if (propType.type === 'int' && propType.description) {
+            var info = new vscode.SignatureInformation(`${prop[0].path}${prop[1].name}`, propType.description);
+            info.parameters = [new vscode.ParameterInformation(`number`)];
+            var help = new vscode.SignatureHelp();
+            help.activeParameter = 0;
+            help.activeSignature = 0;
+            help.signatures = [info];
+            return help;
+        }
+
         if (propType.type !== 'phandle-array' && propType.type !== 'array') {
             return;
         }
@@ -828,6 +869,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             return;
         }
 
+        var paramValues: string[] = [];
         var paramStarts: number[] = [];
         var paramOffset = 0;
         while (rawVal.length) {
@@ -839,7 +881,9 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                 continue;
             }
 
+
             if (rawVal.match(/^\(/)) {
+                var paramValue = '(';
                 paramStarts.push(paramOffset);
                 paramOffset++;
                 rawVal = rawVal.slice(1);
@@ -848,11 +892,14 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                 while (parenLvl > 0 && (match = rawVal.match(/^.*?([()])/))) {
                     parenLvl += 2 * Number(match[1] === '(') - 1;
                     paramOffset += match[0].length;
+                    paramValue += match[0];
                     rawVal = rawVal.slice(match[0].length);
                 }
                 if (parenLvl > 0) {
                     break;
                 }
+
+                paramValues.push(paramValue);
                 continue;
             }
 
@@ -861,6 +908,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                 paramStarts.push(paramOffset);
                 paramOffset += paramMatch[0].length;
                 rawVal = rawVal.slice(paramMatch[0].length);
+                paramValues.push(paramMatch[0]);
                 continue;
             }
             break;
@@ -875,8 +923,23 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         var cells = getCells(prop[1].name, prop[0].parent);
         if (cells) {
             params = cells;
+        } else if (propType.type === 'phandle-array') {
+            var ref : parser.Node;
+            if (paramValues.length > 0 && prop[1].name.endsWith('s') && (ref = this.parser.getPHandleNode(paramValues[0].slice(1)))) {
+                // referenced node type should have a top level entry called {prop[0:-1]}-cells,
+                // e.g. if the property is 'pwms', the referenced type should have an entry 'pwm-cells' that's a list of the parameter names:
+                var cellCountPropName = prop[1].name.slice(0, prop[1].name.length - 1) + '-cells';
+                var refType = this.types.nodeType(ref);
+                if (refType && (cellCountPropName in refType)) {
+                    params = [paramValues[0], ...refType[cellCountPropName]];
+                }
+            }
         } else {
             params = Array((<[]>prop[1].value.value).length).fill('').map((_, i) => `param-${i+1}`);
+        }
+
+        if (!params) {
+            return;
         }
 
         var signature = prop[1].name + ` = < ${params.join(' ')} >;`;

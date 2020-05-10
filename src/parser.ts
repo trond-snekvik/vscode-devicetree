@@ -80,7 +80,7 @@ function parsePropValue(value: string, range: OffsetRange, diags: vscode.Diagnos
                     var level = 1;
                     var text = '(';
                     while (level !== 0) {
-                        m = state.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[<>!=+\-\/*]|\s*|0x[\da-fA-F]+|\d+)\s*)*([()])/);
+                        m = state.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+\-\/*]|\s*|0x[\da-fA-F]+|\d+)\s*)*([()])/);
                         if (!m) {
                             diags.push(new vscode.Diagnostic(new vscode.Range(range.doc.positionAt(exprStartOffset), range.doc.positionAt(exprStartOffset + text.length)), `Unterminated expression`, vscode.DiagnosticSeverity.Error));
                             break;

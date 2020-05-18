@@ -194,7 +194,7 @@ function getPHandleCells(propname: string, parent?: parser.Node): parser.Propert
          * case the cell count is determined by the parent's #gpio-cells property
          */
         var cellName = propname.endsWith('-gpios') ? '#gpio-cells' : ('#' + propname.slice(0, propname.length) + '-cells')
-        return parent.properties().find(p => p.name === cellName);
+        return parent.property(cellName);
     }
 }
 

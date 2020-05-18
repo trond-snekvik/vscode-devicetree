@@ -237,7 +237,10 @@ export class Node {
             this.path = this.fullName;
         }
         this.parent = parent;
-        this.address = parseInt(address, 16);
+        if (address) {
+            this.address = parseInt(address, 16);
+        }
+
         this.name = name;
         this.deleted = false;
         this.entries = [];

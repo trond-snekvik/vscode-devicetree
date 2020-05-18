@@ -433,13 +433,36 @@ export class Parser {
                 continue;
             }
 
-            var deleteNode = state.match(/^\/delete-node\/\s+(&?)([\w,\._+\-]+)/);
+            var deleteNode = state.match(/^(\/delete-node\/\s+)(&?)([\w,\._+\-]+)/);
             if (deleteNode) {
-                var n = this.nodeArray().find(n => (deleteNode[1] ? (n.labels().indexOf(deleteNode[2]) !== -1) : (deleteNode[2] === n.name)));
+                var n = this.nodeArray().find(n => (deleteNode[2] ? (n.labels().indexOf(deleteNode[3]) !== -1) : (deleteNode[3] === n.name)));
                 if (n) {
                     n.deleted = true;
+                } else {
+                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset + deleteNode[1].length, deleteNode[2].length + deleteNode[3].length).toRange(), `Unknown node "${deleteNode[2] + deleteNode[3]}"`, vscode.DiagnosticSeverity.Warning));
                 }
                 requireSemicolon = true;
+                continue;
+            }
+
+            var deleteProp = state.match(/^(\/delete-property\/\s+)([#?\w,\._+\-]+)/);
+            if (deleteProp) {
+                requireSemicolon = true;
+                if (!nodeStack.length) {
+                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset, deleteProp[0].length).toRange(), `Can only delete properties inside a node`, vscode.DiagnosticSeverity.Error));
+                    continue;
+                }
+
+                var props = nodeStack[nodeStack.length-1]?.node.properties();
+                if (!props) {
+                    continue;
+                }
+                var p = props.find(p => p.name === deleteProp[2]);
+                if (!p) {
+                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset + deleteProp[1].length, deleteProp[2].length).toRange(), `Unknown property ${deleteProp[2]}`, vscode.DiagnosticSeverity.Warning));
+                    continue;
+                }
+
                 continue;
             }
 

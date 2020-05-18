@@ -1013,85 +1013,85 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         return <vscode.SignatureHelp>{activeParameter: paramIndex, activeSignature: 0, signatures: [info]};
     }
 
-    provideDocumentRangeFormattingEdits(document: vscode.TextDocument, range: vscode.Range, options: vscode.FormattingOptions, token: vscode.CancellationToken): vscode.ProviderResult<vscode.TextEdit[]> {
-        var entries: parser.NodeEntry[] = [];
-        this.parser.nodeArray().forEach(n => {
-            entries.push(...n.entries.filter(e => e.range.doc.uri.fsPath === document.uri.fsPath && e.range.toRange().intersection(range)));
-        });
-
-        // only format the outermost nodes
-        entries = entries.filter(e => !entries.find(ee => ee !== e && ee.range.containsRange(e.range)));
+    provideDocumentRangeFormattingEdits(document: vscode.TextDocument, r: vscode.Range, options: vscode.FormattingOptions, token: vscode.CancellationToken): vscode.ProviderResult<vscode.TextEdit[]> {
+        var text = document.getText();
+        var start = document.offsetAt(r.start);
+        var end = document.offsetAt(r.end);
+        start = text.slice(0, start).lastIndexOf(';') + 1;
+        end += text.slice(end-1).indexOf(';') + 1;
+        if (end < start) {
+            end = text.length - 1;
+        }
 
         var eol = document.eol == vscode.EndOfLine.CRLF ? '\r\n' : '\n';
 
-        return entries.map(e => {
-            var range = e.range.toRange();
-            var text = document.getText(range);
-            var firstLine = document.getText(new vscode.Range(range.start.line, 0, range.start.line, 99999));
-            var indent = firstLine.match(/^\s*/)[0];
+        let range = new vscode.Range(document.positionAt(start), document.positionAt(end));
+        text = document.getText(range);
+        var firstLine = document.getText(new vscode.Range(range.start.line, 0, range.start.line, 99999));
+        var indent = firstLine.match(/^\s*/)[0];
 
-            text = text.replace(/([\w,\-]+)\s*:[\t ]*/g, '$1: ');
-            text = text.replace(/(&[\w,\-]+)\s*{[\t ]*/g, '$1 {');
-            text = text.replace(/([\w,\-]+)@0*([\da-fA-F]+)\s*{[\t ]*/g, '$1@$2 {');
-            text = text.replace(/(\w+)\s*=\s*(".*?"|<.*?>|\[.*?\])\s*;/g, '$1 = $2;');
-            text = text.replace(/<\s*(.*?)\s*>/g, '< $1 >');
-            text = text.replace(/([;{])[ \t]*\r?\n?/g, '$1' + eol);
-            text = text.replace(/\[\s*((?:[\da-fA-F]{2}\s*)+)\s*\]/g, (_, contents: string) => `[ ${contents.replace(/([\da-fA-F]{2})\s*/g, '$1 ')} ]`);
-            text = text.replace(/[ \t]+\r?\n/g, eol);
+        text = text.replace(/([\w,\-]+)\s*:[\t ]*/g, '$1: ');
+        text = text.replace(/(&[\w,\-]+)\s*{[\t ]*/g, '$1 {');
+        text = text.replace(/([\w,\-]+)@0*([\da-fA-F]+)\s*{[\t ]*/g, '$1@$2 {');
+        text = text.replace(/(\w+)\s*=\s*(".*?"|<.*?>|\[.*?\])\s*;/g, '$1 = $2;');
+        text = text.replace(/<\s*(.*?)\s*>/g, '< $1 >');
+        text = text.replace(/([;{])[ \t]+\r?\n?/g, '$1' + eol);
+        text = text.replace(/\[\s*((?:[\da-fA-F]{2}\s*)+)\s*\]/g, (_, contents: string) => `[ ${contents.replace(/([\da-fA-F]{2})\s*/g, '$1 ')} ]`);
+        text = text.replace(/[ \t]+\r?\n/g, eol);
 
-            // convert tabs to spaces to get the right line width:
-            text = text.replace(/\t/g, ' '.repeat(options.tabSize));
+        // convert tabs to spaces to get the right line width:
+        text = text.replace(/\t/g, ' '.repeat(options.tabSize));
 
-            // move comma separated property values on new lines:
-            text = text.replace(/^([ \t]*)([#\w\-]+)\s*=\s*((?:(?:".*?"|<.*?>|\[.*?\])[ \t]*,?[ \t]*)+);/gm, (line, indentation, p, val) => {
-                if (line.length < 80) {
-                    return line;
-                }
-                var parts = val.match(/(".*?"|<.*?>|\[.*?\])[ \t]*,?[ \t]*/g);
-                var start = `${indentation}${p} = `;
-                return start + parts.map(p => p.trim()).join(`${eol}${indentation}${' '.repeat(p.length + 3)}`) + ';';
-            });
+        var indentStep = options.insertSpaces ? ' '.repeat(options.tabSize) : '\t';
+        if (options.insertSpaces) {
+            text = text.replace(/^\t+/g, tabs => indentStep.repeat(tabs.length));
+        } else {
+            text = text.replace(new RegExp(`^( {${options.tabSize}})+`, 'gm'), spaces => '\t'.repeat(spaces.length / options.tabSize));
+        }
 
-            var indentStep = options.insertSpaces ? ' '.repeat(options.tabSize) : '\t';
-            if (options.insertSpaces) {
-                text = text.replace(/^\t+/g, tabs => indentStep.repeat(tabs.length));
-            } else {
-                text = text.replace(new RegExp(`^( {${options.tabSize}})+`, 'gm'), spaces => '\t'.repeat(spaces.length / options.tabSize));
+        // indentation
+        var commaIndent = '';
+        text = text.split(/\r?\n/).map(line => {
+            var delta = (line.match(/{/g) || []).length - (line.match(/}/g) || []).length;
+            if (delta < 0) {
+                indent = indent.slice(indentStep.repeat(-delta).length);
+            }
+            var retval = line.replace(/^[ \t]*/g, indent + commaIndent);
+            if (delta > 0) {
+                indent += indentStep.repeat(delta);
             }
 
-            // indentation
-            var commaIndent = '';
-            text = text.split(/\r?\n/).map(line => {
-                var delta = (line.match(/{/g) || []).length - (line.match(/}/g) || []).length;
-                if (delta < 0) {
-                    indent = indent.slice(indentStep.repeat(-delta).length);
+            // property values with commas should all have the same indentation
+            if (commaIndent.length === 0 && line.endsWith(',')) {
+                commaIndent = ' '.repeat(line.replace(/\t/g, ' '.repeat(options.tabSize)).indexOf('=') + 2 - indent.replace(/\t/g, ' '.repeat(options.tabSize)).length);
+
+                if (!options.insertSpaces) {
+                    commaIndent = commaIndent.replace(new RegExp(' '.repeat(options.tabSize), 'g'), '\t');
                 }
-                var retval = line.replace(/^[ \t]*/g, indent + commaIndent);
-                if (delta > 0) {
-                    indent += indentStep.repeat(delta);
-                }
+            } else if (line.endsWith(';')) {
+                commaIndent = '';
+            }
 
-                // property values with commas should all have the same indentation
-                if (commaIndent.length === 0 && line.endsWith(',')) {
-                    commaIndent = ' '.repeat(line.replace(/\t/g, ' '.repeat(options.tabSize)).indexOf('=') + 2 - indent.replace(/\t/g, ' '.repeat(options.tabSize)).length);
+            return retval;
+        }).join(eol);
 
-                    if (!options.insertSpaces) {
-                        commaIndent = commaIndent.replace(new RegExp(' '.repeat(options.tabSize), 'g'), '\t');
-                    }
-                } else if (line.endsWith(';')) {
-                    commaIndent = '';
-                }
 
-                return retval;
-            }).join(eol);
+        // move comma separated property values on new lines:
+        text = text.replace(/^([ \t]*)([#\w\-]+)\s*=\s*((?:(?:".*?"|<.*?>|\[.*?\])[ \t]*,?[ \t]*)+);/gm, (line, indentation, p, val) => {
+            if (line.length < 80) {
+                return line;
+            }
+            var parts = val.match(/(".*?"|<.*?>|\[.*?\])[ \t]*,?[ \t]*/g);
+            var start = `${indentation}${p} = `;
+            return start + parts.map(p => p.trim()).join(`${eol}${indentation}${' '.repeat(p.length + 3)}`) + ';';
+        });
 
-            // The indentation stuff broke multiline comments. The * on the follow up lines must align with the * in /*:
-            text = text.replace(/\/\*[\s\S]*?\*\//g, content => {
-                return content.replace(/^([ \t]*)\*/gm, '$1 *');
-            });
+        // The indentation stuff broke multiline comments. The * on the follow up lines must align with the * in /*:
+        text = text.replace(/\/\*[\s\S]*?\*\//g, content => {
+            return content.replace(/^([ \t]*)\*/gm, '$1 *');
+        });
 
-            return new vscode.TextEdit(e.range.toRange(), text);
-        })
+        return [new vscode.TextEdit(range, text)];
     }
 }
 

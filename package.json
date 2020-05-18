@@ -59,7 +59,9 @@
                         "type": "array",
                         "description": "List of directories containing binding descriptors. Relative paths are executed from each workspace. Defaults to dts/bindings",
                         "default": [
-                            "dts/bindings"
+                            "dts/bindings",
+                            "zephyr/dts/bindings",
+                            "nrf/dts/bindings"
                         ]
                     }
                 }

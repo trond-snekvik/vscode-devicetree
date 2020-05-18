@@ -696,6 +696,23 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             });
         }
 
+
+        var lineRange = new vscode.Range(position.line, 0, position.line, 999999);
+        var line = document.getText(lineRange);
+
+        var deleteLine = line.slice(0, position.character).match(/\/delete-(node|property)\/\s+[^\s;]*$/);
+        if (deleteLine) {
+            if (deleteLine[1] === 'node') {
+                if (node) {
+                    return [...node.children().map(n => new vscode.CompletionItem(n.fullName, vscode.CompletionItemKind.Class)), ...labelItems(false)];
+                } else {
+                    return labelItems(false);
+                }
+            } else if (node) {
+                return node.uniqueProperties().map(p => new vscode.CompletionItem(p.name, vscode.CompletionItemKind.Property));
+            }
+        }
+
         if (!node) {
             var root = new vscode.CompletionItem('/', vscode.CompletionItemKind.Class);
             root.insertText = new vscode.SnippetString('/ {\n\t');
@@ -707,9 +724,6 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
             return [root, ...labelItems(true)];
         }
-
-        var lineRange = new vscode.Range(position.line, 0, position.line, 999999);
-        var line = document.getText(lineRange);
 
         var propValueTemplate = (value: string, propType: types.PropertyTypeString | types.PropertyTypeString[]) => {
             if (Array.isArray(propType)) {
@@ -849,9 +863,23 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         }
         anyNode.insertText.appendText('\n};');
 
+        // commands (/command/):
+        var commandStart = line.search(/\/(?:$|\w)/);
+        if (commandStart >= 0) {
+            var commandRange = new vscode.Range(new vscode.Position(position.line, commandStart), new vscode.Position(position.line, position.character-1));
+        }
+
+        var deleteNode = new vscode.CompletionItem('/delete-node/', vscode.CompletionItemKind.Function);
+        deleteNode.range = commandRange;
+
+        var deleteProp = new vscode.CompletionItem('/delete-property/', vscode.CompletionItemKind.Function);
+        deleteProp.range = commandRange;
+
         return [
             ...propCompletions,
             anyNode,
+            deleteNode,
+            deleteProp,
             ...nodes.map(n => {
                 var completion = new vscode.CompletionItem(n.name, vscode.CompletionItemKind.Class);
                 completion.insertText = new vscode.SnippetString();

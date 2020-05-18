@@ -24,7 +24,7 @@ function getBindingDirs(): string[] {
     dirs.forEach(d => {
         var variable = d.match(/^\${(workspaceFolder)(?::(.+?))}/);
         if (variable) {
-            if (vscode.workspace.workspaceFolders.length === 0) {
+            if (!vscode.workspace.workspaceFolders) {
                 paths.push(vscode.env.appRoot);
                 return;
             }
@@ -37,7 +37,7 @@ function getBindingDirs(): string[] {
 
         if (path.isAbsolute(d)) {
             paths.push(d);
-        } else {
+        } else if (vscode.workspace.workspaceFolders) {
             paths.push(...vscode.workspace.workspaceFolders.map(w => path.resolve(w.uri.fsPath, d)));
         }
     });

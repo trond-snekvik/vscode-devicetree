@@ -243,6 +243,11 @@ export class Node {
         this.entries = [];
     }
 
+    enabled(): boolean {
+        var status = this.property('status');
+        return !status || (status.value.value === 'okay');
+    }
+
     hasLabel(label: string) {
         return !!this.entries.find(e => e.labels.indexOf(label) != -1);
     }
@@ -263,6 +268,16 @@ export class Node {
         var props: Property[] = [];
         this.entries.forEach(e => props.push(...e.properties));
         return props;
+    }
+
+    property(name: string): Property | undefined {
+        var prop: Property = undefined;
+        // use the last found entry (this is the one that counts according to DTS):
+        this.entries.forEach(e => {
+            prop = e.properties.find(e => e.name === name);
+        });
+
+        return prop ?? undefined;
     }
 
     uniqueProperties(): Property[] {

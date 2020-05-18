@@ -160,9 +160,13 @@ function mergeProperties(base: PropertyType[], inherited: PropertyType[]): Prope
     if (!inherited) {
         return base;
     }
+
     return [
         ...inherited.filter(p => !base.find(bp => bp.name === p.name)),
-        ...base.map(p => { return { ...inherited.find(i => i.name === p.name), ...p }; }),
+        ...base.map(p => {
+            var i = inherited.find(i => i.name === p.name);
+            return { ...i, ...p, required: i?.required || p?.required};
+        }),
     ];
 };
 

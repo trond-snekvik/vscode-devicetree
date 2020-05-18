@@ -5,6 +5,7 @@ import * as types from './types';
 import * as glob from 'glob';
 import { readFileSync } from 'fs';
 import * as path from 'path';
+import { isArray } from 'util';
 
 
 function getConfig(variable: string) {
@@ -300,9 +301,37 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
             entry.children.forEach(c => annotateNode(c, type));
 
+            // Check overlapping ranges
+            if (props.find(p => p.name === '#address-cells' && p.value.value === 1) && props.find(p => p.name === '#size-cells' && p.value.value === 1)) {
+                let ranges = new Array<{n: parser.NodeEntry, start: number, size: number}>();
+                entry.children.forEach(c => {
+                    let reg = c.properties.find(p => p.name === 'reg');
+                    if (c.node.enabled() && reg && isArray(reg.value.value)) {
+                        let range = {n: c, start: reg.value.value[0], size: reg.value.value[1]};
+                        let overlap = ranges.find(r => r.start + r.size > range.start && range.start + range.size > r.start);
+                        if (overlap) {
+                            let diag = new vscode.Diagnostic(c.nameRange.toRange(), `Range overlaps with ${overlap.n.node.fullName}`, vscode.DiagnosticSeverity.Warning);
+                            if (overlap.start < range.start) {
+                                diag.message += ` (ends at 0x${(overlap.start + overlap.size).toString(16)})`;
+                            } else {
+                                diag.message += ` (${c.node.fullName} ends at 0x${(range.start + range.size).toString(16)})`;
+                            }
+                            diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(overlap.n.nameRange.doc.uri, overlap.n.nameRange.toRange()), `${overlap.n.node.fullName} declared here`)];
+                            diags.push(diag);
+                        }
+
+                        ranges.push(range);
+                    }
+                });
+            }
+
             if (!type) {
                 diags.push(new vscode.Diagnostic(entry.nameRange.toRange(), `Unknown node type`, vscode.DiagnosticSeverity.Warning));
                 return;
+            }
+
+            if (type['on-bus'] && type['on-bus'] !== parentType?.['bus']) {
+                diags.push(new vscode.Diagnostic(entry.nameRange.toRange(), `Node should only occur on the ${type['on-bus']} bus.`, vscode.DiagnosticSeverity.Error));
             }
 
             type.properties.forEach(propType => {
@@ -373,6 +402,11 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                                         prop.range.toRange(),
                                         `reg property must be on format <${cells.join(' ')}>`,
                                         vscode.DiagnosticSeverity.Error));
+                                } else if (cells.length > 0 && cells[0] === 'addr' && node.address !== NaN && node.address !== prop.value.value && node.address !== prop.value.value[0]) {
+                                    diags.push(new vscode.Diagnostic(
+                                        prop.range.toRange(),
+                                        `Node address does not match address cell (expected 0x${node.address.toString(16)})`,
+                                        vscode.DiagnosticSeverity.Warning));
                                 }
                             } else {
                                 diags.push(new vscode.Diagnostic(
@@ -403,13 +437,14 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                             }
 
                         } else if (prop.name === 'status') {
-                            // Kind of intrusive? Also needs to go on every entry for this node.
-                            // if (prop.value.value === 'disabled') {
-                            //     var diag = new vscode.Diagnostic(entry.range.toRange(), `Disabled`, vscode.DiagnosticSeverity.Hint);
-                            //     diag.tags = [vscode.DiagnosticTag.Unnecessary];
-                            //     diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(prop.range.doc.uri, prop.range.toRange()), `Disabled here`)];
-                            //     diags.push(diag);
-                            // }
+                            if (prop.value.value === 'disabled') {
+                                node.entries.filter(e => e.range.doc.uri.fsPath === doc.uri.fsPath).forEach(e => {
+                                    var diag = new vscode.Diagnostic(e.nameRange.toRange(), `Disabled`, vscode.DiagnosticSeverity.Hint);
+                                    diag.tags = [vscode.DiagnosticTag.Unnecessary];
+                                    diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(prop.range.doc.uri, prop.range.toRange()), `Disabled here`)];
+                                    diags.push(diag);
+                                });
+                            }
                         } else if (propType.type === 'phandle-array' && Array.isArray(prop.value.value)) {
                             var c = getPHandleCells(prop.name, node.parent);
                             if (c) {
@@ -433,7 +468,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
             entry.properties.forEach(p => {
                 if (!type.properties.find(t => t.name === p.name)) {
-                    diags.push(new vscode.Diagnostic(p.range.toRange(), `Property not mentioned in type "${type.name}"`, vscode.DiagnosticSeverity.Warning));
+                    diags.push(new vscode.Diagnostic(p.range.toRange(), `Property not mentioned in type "${type.name ?? parentType.name + '::child-node'}"`, vscode.DiagnosticSeverity.Warning));
                 }
             });
         }

@@ -465,7 +465,7 @@ export class TypeLoader {
                 return pathBasedType;
             }
 
-            if (node.path.match(/\/cpus\/cpu.*/)) {
+            if (node.path.match(/\/cpus\/cpu[^\/]*$/)) {
                 return this.get('/cpus/cpu');
             }
 

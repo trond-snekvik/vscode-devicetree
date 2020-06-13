@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-
+import * as fs from 'fs';
+import { setFlagsFromString } from 'v8';
 
 type PHandle = {node: string};
 type _PHandleArray = (string | number)[];
@@ -7,17 +8,338 @@ type PHandleArray = _PHandleArray | _PHandleArray[];
 type _PropertyValue = string | number | boolean | PHandle | PHandle[] | PHandleArray[] | number[];
 export type PropertyValue = _PropertyValue | _PropertyValue[]; // composite
 
-function parsePropValue(value: string, range: OffsetRange, diags: vscode.Diagnostic[]) {
+class Define {
+    name: string;
+    value: string;
+    args?: string[]
+
+
+    replace(text: string): string {
+        if (!this.args) {
+            return text
+                .replace(new RegExp(`(?<!#)#${this.name}\b`, 'g'), `"${this.value}"`)
+                .replace(new RegExp(`\b${this.name}\b`), this.value);
+        }
+
+        return text.replace(new RegExp(`\b${this.name}\s*\(([^,]+)${',([^,]*)'.repeat(this.args.length - 1)}\)`), (t: string, ...args: string[]) => {
+            let text = this.value;
+            this.args.forEach((a, i) => {
+                text = text.replace(new RegExp(`(?<!#)#${a}\b`, 'g'), `"${args[i]}"`);
+                text = text.replace(new RegExp(`\b${a}\b`), args[i]);
+
+            });
+
+            return text.replace('#', '');
+        });
+    }
+
+    constructor(name: string, value: string, args?: string[]) {
+        this.name = name;
+        this.value = value;
+        this.args = args;
+    }
+};
+
+class Line {
+    text: string;
+    number: number;
+    uri: vscode.Uri;
+    get location(): vscode.Location {
+        return new vscode.Location(this.uri, new vscode.Range(this.number, 0, this.number, this.text.length));
+    }
+
+    get length(): number {
+        return this.text.length;
+    }
+
+    constructor(text: string, number: number, uri: vscode.Uri) {
+        this.text = text;
+        this.number = number;
+        this.uri = uri;
+    }
+}
+
+type Offset = { line: number, col: number };
+
+class ParserState {
+    defines: Define[];
+    includes: string[];
+    private text: string;
+    private offset: Offset;
+    private prevMatch: string;
+    diags: {uri: vscode.Uri, diags: vscode.Diagnostic[]}[];
+    lines: Line[];
+    uri: vscode.Uri;
+
+    private pushUriDiag(uri: vscode.Uri, diag: vscode.Diagnostic) {
+        var collection = this.diags.find(c => c.uri.fsPath === uri.fsPath);
+        if (!collection) {
+            collection = {uri: uri, diags: [] };
+            this.diags.push(collection);
+        }
+
+        collection.diags.push(diag);
+        return diag;
+    }
+
+    private pushLineDiag(line: Line, message: string, severity: vscode.DiagnosticSeverity=vscode.DiagnosticSeverity.Error, start: number=0, end: number=99999): vscode.Diagnostic {
+        return this.pushUriDiag(line.uri, new vscode.Diagnostic(new vscode.Range(line.number, start, line.number, end), message, severity));
+    }
+
+    private getPrevMatchLine() {
+        if (this.offset.col) {
+            return this.lines[this.offset.line];
+        }
+
+        if (this.offset.line >= 1) {
+            return this.lines[this.offset.line - 1];
+        }
+
+        return this.lines[0];
+    }
+
+    location() {
+        var start: number;
+        var end: number;
+        var line = this.getPrevMatchLine();
+
+        if (this.offset.col) {
+            start = this.offset.col - this.prevMatch.length;
+            end = this.offset.col;
+        } else if (this.offset.line >= 1) {
+            start = this.lines[this.offset.line - 1].length - this.prevMatch.length;
+            end = this.lines[this.offset.line - 1].length;
+        } else {
+            start = 0;
+            end = this.lines[0].length;
+        }
+
+        return new vscode.Location(line.uri, new vscode.Range(line.number, start, line.number, end));
+    }
+
+    pushDiag(message: string, severity: vscode.DiagnosticSeverity=vscode.DiagnosticSeverity.Error): vscode.Diagnostic {
+        var loc = this.location();
+        return this.pushUriDiag(loc.uri, new vscode.Diagnostic(loc.range, message, severity));
+    }
+
+    private replaceDefines(text: string) {
+        this.defines.forEach(d => {
+            text = d.replace(text);
+        });
+
+        return text;
+    }
+
+    evaluate(text: string): any {
+        text = this.replaceDefines(text);
+        return eval(text); // Danger! :(
+    }
+
+    private preprocess(): Line[] {
+        const genLines = (text: string, uri: vscode.Uri): Line[] => {
+            return text.split(/\r?\n/g).map((line, i) => new Line(line, i, uri));
+        };
+
+        let rawLines = genLines(this.text, this.uri);
+        let lines = new Array<Line>();
+        let conditions: boolean[] = [];
+        let once = new Array<vscode.Uri>();
+
+        while (rawLines.length) {
+            var line = rawLines.splice(0)[0];
+            var text = line.text;
+            while (text.endsWith('\\') && rawLines.length) {
+                text = text.slice(0, text.length) + rawLines.splice(0)[0].text;
+            }
+
+            try {
+                let directive = text.match(/^\s*#\s*(\w+)\s*(.*)/);
+                if (directive) {
+                    let value = directive[2].trim();
+
+                    if (directive[1] === 'define') {
+                        let define = directive[2].match(/^(\w+)\s*(?:\((.*?)\))?\s+(.*)/);
+                        if (!define) {
+                            this.pushLineDiag(line, 'Invalid define syntax');
+                            continue;
+                        }
+
+                        this.defines.push(new Define(define[0], define[2], define[1]?.split(',').map(a => a.trim())));
+                    } else if (directive[1] === 'undef') {
+                        let undef = value.match(/^\w+/);
+                        if (!value) {
+                            this.pushLineDiag(line, 'Invalid undef syntax');
+                            continue;
+                        }
+
+                        this.defines = this.defines.filter(d => d.name !== undef[0]);
+                    } else if (directive[1] === 'if') {
+                        let condition = this.replaceDefines(directive[2]);
+                        condition = condition.replace(new RegExp(`defined\\((.*?)\\)`, 'g'), (t, define) => {
+                            return this.defines.some(d => d.name === define) ? '1' : '0';
+                        });
+
+                        conditions.push(!!this.evaluate(condition));
+                    } else if (directive[1] === 'ifdef') {
+                        conditions.push(this.defines.some(d => d.name === value));
+                    } else if (directive[1] === 'ifndef') {
+                        conditions.push(!this.defines.some(d => d.name === value));
+                    } else if (directive[1] === 'else') {
+                        if (!conditions.length) {
+                            this.pushLineDiag(line, `Unexpected #else`);
+                            continue;
+                        }
+
+                        conditions[conditions.length - 1] = !conditions[conditions.length - 1];
+                    } else if (directive[1] === 'elsif') {
+                        if (!conditions.length) {
+                            this.pushLineDiag(line, `Unexpected #elsif`);
+                            continue;
+                        }
+
+                        if (conditions[conditions.length - 1]) {
+                            conditions[conditions.length - 1] = false;
+                            continue;
+                        }
+
+                        let condition = this.replaceDefines(directive[2]);
+                        condition = condition.replace(new RegExp(`defined\\((.*?)\\)`, 'g'), (t, define) => {
+                            return this.defines.some(d => d.name === define) ? '1' : '0';
+                        });
+
+                        conditions[conditions.length - 1] = this.evaluate(condition);
+                    } else if (directive[1] === 'endif') {
+                        if (!conditions.length) {
+                            this.pushLineDiag(line, `Unexpected #elsif`);
+                            continue;
+                        }
+
+                        conditions.pop();
+                    } else if (directive[1] === 'pragma') {
+                        if (value === 'once') {
+                            if (once.some(uri => uri.fsPath === line.uri.fsPath)) {
+                                let lines = rawLines.findIndex(l => l.uri.fsPath !== line.uri.fsPath);
+                                if (lines >= 0) {
+                                    rawLines.splice(0, lines + 1);
+                                }
+                                continue;
+                            }
+
+                            once.push(line.uri);
+                        } else {
+                            this.pushLineDiag(line, `Unknown pragma directive "${value}"`)
+                        }
+                    } else if (directive[1] === 'include') {
+                        let include = directive[2].replace(/["<>]/g, '').trim();
+                        let file = this.includes.find(i => fs.existsSync(i + '/' + include));
+                        if (!file) {
+                            this.pushLineDiag(line, `No such file: ${include}`, vscode.DiagnosticSeverity.Warning);
+                            continue;
+                        }
+
+                        // inject the included file's lines. They will be the next to be processed:
+                        rawLines = [...genLines(fs.readFileSync(file, 'utf-8'), vscode.Uri.file(file)), ...rawLines];
+                    } else if (directive[1] === 'error') {
+                        this.pushLineDiag(line, directive[2] ?? 'Error');
+                    }
+
+                    continue;
+                }
+
+                if (!conditions.every(c => c)) {
+                    continue;
+                }
+
+                lines.push(new Line(this.replaceDefines(text), line.number, line.uri));
+            } catch (e) {
+                this.pushLineDiag(line, 'Crashed: ' + e);
+            }
+        }
+
+        return lines;
+    }
+
+    match(pattern: RegExp): RegExpMatchArray | undefined {
+        var match = this.peek(pattern);
+        if (match) {
+            this.offset.col += match[0].length;
+            if (this.offset.col === this.lines[this.offset.line].length) {
+                this.offset.col = 0;
+                this.offset.line++;
+            }
+
+            this.prevMatch = match[0];
+        }
+
+        return match;
+    }
+
+    skipWhitespace() {
+        this.match(/^\s+/);
+        return this.text.length > 0;
+    }
+
+    skipToken() {
+        var match = this.match(/^\S+/);
+        if (!match) {
+            this.offset.line = this.lines.length;
+            return '';
+        }
+
+        return match[0];
+    }
+
+    peek(pattern: RegExp) {
+        if (this.offset.line >= this.lines.length) {
+            return undefined;
+        }
+
+        return this.lines[this.offset.line].text.slice(this.offset.col).match(pattern);
+    }
+
+    freeze(): Offset {
+        return { ... this.offset };
+    }
+
+    since(state: Offset) {
+        return this.lines.slice(state.line, this.offset.line).map((l, i) => {
+            var start = 0;
+            var end = l.length;
+
+            if (i === this.offset.line - state.line) {
+                if (i === 0) {
+                    return l.text.slice(state.col, this.offset.col);
+                }
+
+                return l.text.slice(0, this.offset.col);
+            }
+
+            if (i === 0) {
+                return l.text.slice(state.col);
+            }
+
+            return l.text;
+        }).join('\n');
+    }
+
+    constructor(text: string, uri: vscode.Uri, defines: Define[]=[], includes: string[]=[]) {
+        this.text = text;
+        this.defines = defines;
+        this.includes = includes;
+        this.uri = uri;
+        this.diags = [];
+        this.offset = {line: 0, col: 0};
+        this.lines = this.preprocess();
+    }
+}
+
+function parsePropValue(state: ParserState) {
     var elems: _PropertyValue[] = [];
-    var state = new ParserState(value);
-    var match: RegExpMatchArray;
 
     while (state.skipWhitespace()) {
-        var offset = range.start + state.offset;
-
         if (elems.length > 0) {
             if (!state.match(/^,\s*/)) {
-                diags.push(new vscode.Diagnostic(new vscode.Range(range.doc.positionAt(offset), range.doc.positionAt(offset + 1)), `Expected , or ;`, vscode.DiagnosticSeverity.Error));
+                state.pushDiag(`Expected , or ;`);
             }
         }
 
@@ -74,7 +396,6 @@ function parsePropValue(value: string, range: OffsetRange, diags: vscode.Diagnos
                     continue;
                 }
 
-                var exprStartOffset = range.start + state.offset;
                 m = state.match(/^\(/);
                 if (m) {
                     var level = 1;
@@ -82,7 +403,7 @@ function parsePropValue(value: string, range: OffsetRange, diags: vscode.Diagnos
                     while (level !== 0) {
                         m = state.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+\-\/*]|\s*|0x[\da-fA-F]+|\d+)\s*)*([()])/);
                         if (!m) {
-                            diags.push(new vscode.Diagnostic(new vscode.Range(range.doc.positionAt(exprStartOffset), range.doc.positionAt(exprStartOffset + text.length)), `Unterminated expression`, vscode.DiagnosticSeverity.Error));
+                            state.pushDiag(`Unterminated expression`);
                             break;
                         }
                         text += m[0];
@@ -98,7 +419,7 @@ function parsePropValue(value: string, range: OffsetRange, diags: vscode.Diagnos
                             values.push(num);
                         }
                     } catch (e) {
-                        diags.push(new vscode.Diagnostic(new vscode.Range(range.doc.positionAt(exprStartOffset), range.doc.positionAt(exprStartOffset + text.length)), `Unable to evaluate expression`, vscode.DiagnosticSeverity.Error));
+                        state.pushDiag(`Unable to evaluate expression`);
                     }
                     continue;
                 }
@@ -108,7 +429,7 @@ function parsePropValue(value: string, range: OffsetRange, diags: vscode.Diagnos
                 }
 
                 var unexpectedToken = state.skipToken();
-                diags.push(new vscode.Diagnostic(new vscode.Range(range.doc.positionAt(exprStartOffset), range.doc.positionAt(exprStartOffset + unexpectedToken.length)), `Unexpected token ${unexpectedToken}`, vscode.DiagnosticSeverity.Error));
+                state.pushDiag(`Unexpected token`);
                 if (unexpectedToken === ';') {
                     break;
                 }
@@ -123,8 +444,12 @@ function parsePropValue(value: string, range: OffsetRange, diags: vscode.Diagnos
             continue;
         }
 
-        var unexpectedToken = state.skipToken();
-        diags.push(new vscode.Diagnostic(new vscode.Range(range.doc.positionAt(offset), range.doc.positionAt(offset + unexpectedToken.length)), `Unexpected token in property value`, vscode.DiagnosticSeverity.Error));
+        if (state.peek(/^;/)) {
+            break;
+        }
+
+        state.skipToken();
+        state.pushDiag(`Unexpected token in property value`);
     }
 
     if (elems.length === 1) {
@@ -132,7 +457,7 @@ function parsePropValue(value: string, range: OffsetRange, diags: vscode.Diagnos
     }
 
     if (elems.length === 0) {
-        diags.push(new vscode.Diagnostic(new vscode.Range(range.doc.positionAt(range.start), range.doc.positionAt(range.start + state.offset)), `Expected property value`, vscode.DiagnosticSeverity.Error));
+        this.pushDiag(`Expected property value`);
     }
 
     return elems;
@@ -142,15 +467,19 @@ export class Property {
     name: string;
     labels?: string[];
     value: {value: PropertyValue, raw: string};
-    range: OffsetRange;
+    loc: vscode.Location;
 
-    constructor(name: string, range: OffsetRange, labels?: string[], value?: string, diags: vscode.Diagnostic[] = []) {
+    constructor(name: string, loc: vscode.Location, state: ParserState, labels?: string[]) {
         this.name = name;
-        this.range = range;
+        this.loc = loc;
         this.labels = labels;
+
+
+        state.skipWhitespace();
+        var start = state.freeze();
+        var value = parsePropValue(state);
         if (value) {
-            var valueOffset = range.doc.getText(range.toRange()).indexOf(value);
-            this.value = {value: parsePropValue(value, new OffsetRange(range.doc, range.start + valueOffset, range.length - valueOffset - 1), diags), raw: value};
+            this.value = {value: value, raw: state.since(start)};
         } else {
             this.value = {value: true, raw: ''};
         }
@@ -289,40 +618,6 @@ export class Node {
     }
 };
 
-class ParserState {
-    text: string;
-    offset: number;
-
-    match(pattern: RegExp): RegExpMatchArray | undefined {
-        var match = this.text.match(pattern);
-        if (match) {
-            this.text = this.text.slice(match[0].length);
-            this.offset += match[0].length;
-        }
-        return match;
-    }
-
-    skipWhitespace() {
-        this.match(/^\s+/);
-        return this.text.length > 0;
-    }
-
-    skipToken() {
-        var match = this.match(/^\S+/);
-        var token = match ? match[0] : this.text;
-        if (!match) {
-            this.offset += this.text.length;
-            this.text = '';
-        }
-        return token;
-    }
-
-    constructor(text: string) {
-        this.text = text;
-        this.offset = 0;
-    }
-}
-
 export class Parser {
 
     nodes: {[fullPath: string]: Node};
@@ -402,11 +697,10 @@ export class Parser {
         }
         var timeStart = process.hrtime();
         this.cleanFile(doc);
-        var state = new ParserState(text);
+        var state = new ParserState(text, doc.uri);
         var nodeStack: NodeEntry[] = [];
         var requireSemicolon = false;
         while (state.skipWhitespace()) {
-            var offset = state.offset;
             var blockComment = state.match(/^\/\*[\s\S]*?\*\//);
             if (blockComment) {
                 continue;
@@ -420,7 +714,7 @@ export class Parser {
             if (requireSemicolon) {
                 var token = state.match(/^[^;]+/);
                 if (token) {
-                    diags.push(new vscode.Diagnostic(new vscode.Range(doc.positionAt(offset), doc.positionAt(offset + token[0].length)), 'Expected semicolon'));
+                    state.pushDiag('Expected semicolon');
                     continue;
                 }
                 var token = state.match(/^;/);
@@ -436,23 +730,39 @@ export class Parser {
                 continue;
             }
 
-            var deleteNode = state.match(/^(\/delete-node\/\s+)(&?)([\w,\._+\-]+)/);
+            var deleteNode = state.match(/^\/delete-node\//);
             if (deleteNode) {
-                var n = this.nodeArray().find(n => (deleteNode[2] ? (n.labels().indexOf(deleteNode[3]) !== -1) : (deleteNode[3] === n.name)));
+                state.skipWhitespace();
+                requireSemicolon = true;
+
+                let node = state.match(/^(&?)([\w,\._+\-]+)/);
+                if (!node) {
+                    state.pushDiag(`Expected node`);
+                    continue;
+                }
+
+                var n = this.nodeArray().find(n => (node[1] ? (n.labels().indexOf(node[2]) !== -1) : (node[2] === n.name)));
                 if (n) {
                     n.deleted = true;
                 } else {
-                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset + deleteNode[1].length, deleteNode[2].length + deleteNode[3].length).toRange(), `Unknown node "${deleteNode[2] + deleteNode[3]}"`, vscode.DiagnosticSeverity.Warning));
+                    state.pushDiag(`Unknown node`, vscode.DiagnosticSeverity.Warning);
                 }
-                requireSemicolon = true;
                 continue;
             }
 
-            var deleteProp = state.match(/^(\/delete-property\/\s+)([#?\w,\._+\-]+)/);
+            var deleteProp = state.match(/^\/delete-property\//);
             if (deleteProp) {
+                state.skipWhitespace();
                 requireSemicolon = true;
+
+                var prop = state.match(/^[#?\w,\._+\-]+/);
+                if (!prop) {
+                    state.pushDiag('Expected property');
+                    continue;
+                }
+
                 if (!nodeStack.length) {
-                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset, deleteProp[0].length).toRange(), `Can only delete properties inside a node`, vscode.DiagnosticSeverity.Error));
+                    state.pushDiag(`Can only delete properties inside a node`);
                     continue;
                 }
 
@@ -460,9 +770,9 @@ export class Parser {
                 if (!props) {
                     continue;
                 }
-                var p = props.find(p => p.name === deleteProp[2]);
+                var p = props.find(p => p.name === deleteProp[0]);
                 if (!p) {
-                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset + deleteProp[1].length, deleteProp[2].length).toRange(), `Unknown property ${deleteProp[2]}`, vscode.DiagnosticSeverity.Warning));
+                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset + deleteProp[1].length, deleteProp[0].length).toRange(), `Unknown property ${deleteProp[0]}`, vscode.DiagnosticSeverity.Warning));
                     continue;
                 }
 

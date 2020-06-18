@@ -484,18 +484,18 @@ export class TypeLoader {
                         });
                         return n;
                     }
-                    diags.push(new Diagnostic(compatible.range.toRange(), `Property compatible must be an array of strings`, DiagnosticSeverity.Warning));
+                    diags.push(new Diagnostic(compatible.loc.range, `Property compatible must be an array of strings`, DiagnosticSeverity.Warning));
                 } else {
-                    diags.push(new Diagnostic(compatible.range.toRange(), `Property compatible must be a string or an array of strings`, DiagnosticSeverity.Warning));
+                    diags.push(new Diagnostic(compatible.loc.range, `Property compatible must be a string or an array of strings`, DiagnosticSeverity.Warning));
                 }
-                diags.push(new Diagnostic(compatible.range.toRange(), `Unknown type ${compatible.value.raw}`, DiagnosticSeverity.Warning));
+                diags.push(new Diagnostic(compatible.loc.range, `Unknown type ${compatible.value.raw}`, DiagnosticSeverity.Warning));
                 return;
             }
 
             if (parentType && parentType['child-binding']) {
                 return parentType['child-binding'];
             }
-            diags.push(...node.entries.map(e => new Diagnostic(e.nameRange.toRange(), `Missing "compatible" property`, DiagnosticSeverity.Warning)));
+            diags.push(...node.entries.map(e => new Diagnostic(e.nameLoc.range, `Missing "compatible" property`, DiagnosticSeverity.Warning)));
         };
 
         var type = getBaseType();

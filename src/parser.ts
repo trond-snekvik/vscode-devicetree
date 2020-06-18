@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { setFlagsFromString } from 'v8';
+import * as path from 'path';
+import { execSync, spawnSync } from 'child_process';
 
 type PHandle = {node: string};
 type _PHandleArray = (string | number)[];
@@ -8,29 +10,109 @@ type PHandleArray = _PHandleArray | _PHandleArray[];
 type _PropertyValue = string | number | boolean | PHandle | PHandle[] | PHandleArray[] | number[];
 export type PropertyValue = _PropertyValue | _PropertyValue[]; // composite
 
-class Define {
+export class Macro {
     name: string;
     value: string;
     args?: string[]
 
+    find(text: string, defines: Macro[], loc: vscode.Location, inMacro=false): MacroInstance[] {
+        let insertText: string;
+        let match: RegExpExecArray;
+        let result = new Array<MacroInstance>();
+        let tag = this.args ? `${this.name}\\s*\\(` : this.name;
 
-    replace(text: string): string {
-        if (!this.args) {
-            return text
-                .replace(new RegExp(`(?<!#)#${this.name}\b`, 'g'), `"${this.value}"`)
-                .replace(new RegExp(`\b${this.name}\b`), this.value);
+        let regex = new RegExp(`(?<!#)#${tag}|\\b${tag}\\b`, 'g');
+        while (match = regex.exec(text)) {
+            if (insertText === undefined) {
+                let otherDefines = defines.filter(d => d !== this);
+                let macros = new Array<MacroInstance>();
+                otherDefines.forEach(d => {
+                    macros.push(...d.find(this.value, otherDefines, loc, true));
+                });
+
+                insertText = MacroInstance.process(this.value, macros);
+            }
+
+            let replaceText = match[0].startsWith('#') ? `"${insertText}"` : insertText;
+
+            let raw = match[0];
+            let arg = '';
+            if (this.args) {
+                let args = new Array<string>();
+                text = text.slice(match.index + match[0].length);
+                let depth = 1;
+                while (depth && text.length) {
+                    let paramMatch = text.match(/^([^(),]*)(.)/);
+                    if (!paramMatch) {
+                        return [];
+                    }
+
+                    raw += paramMatch[0];
+                    arg += paramMatch[0];
+                    text = text.slice(paramMatch[0].length);
+                    if (paramMatch[2] === '(') {
+                        depth++;
+                    } else {
+                        if (depth === 1) {
+                            args.push(arg.slice(0, arg.length-1).trim());
+                            arg = '';
+                        }
+
+                        if (paramMatch[2] === ')') {
+                            depth--;
+                        }
+                    }
+                }
+
+                if (depth) {
+                    return [];
+                }
+
+                let varArgs = new Macro('__VA_ARGS__', '');
+
+                let macroArgs = args.map((a, i) => {
+                    if (i >= this.args.length - 1 && this.args[this.args.length - 1] === '...') {
+                        if (varArgs.value) {
+                            varArgs.value += ', ';
+                        }
+
+                        varArgs.value += a
+                        return undefined;
+                    } else if (i >= this.args.length) {
+                        return undefined;
+                    }
+
+                    let macros = new Array<MacroInstance>();
+                    defines.forEach(d => {
+                        macros.push(...d.find(a, defines, loc, true));
+                    });
+                    return new Macro(this.args[i], MacroInstance.process(a, macros));
+                }).filter(arg => arg !== undefined);
+
+                macroArgs.push(varArgs);
+                if (!varArgs.value) {
+                    // GCC extension (https://gcc.gnu.org/onlinedocs/cpp/Variadic-Macros.html#Variadic-Macros)
+                    macroArgs.push(new Macro(',\\s*##__VA_ARGS__', ''));
+                }
+
+                let macros = new Array<MacroInstance>();
+                macroArgs.forEach(arg => {
+                    macros.push(...arg.find(replaceText, macroArgs, loc, true));
+                });
+                result.push(new MacroInstance(raw, MacroInstance.process(replaceText, macros), match.index));
+            } else {
+                result.push(new MacroInstance(match[0], replaceText, match.index));
+            }
         }
 
-        return text.replace(new RegExp(`\b${this.name}\s*\(([^,]+)${',([^,]*)'.repeat(this.args.length - 1)}\)`), (t: string, ...args: string[]) => {
-            let text = this.value;
-            this.args.forEach((a, i) => {
-                text = text.replace(new RegExp(`(?<!#)#${a}\b`, 'g'), `"${args[i]}"`);
-                text = text.replace(new RegExp(`\b${a}\b`), args[i]);
+        regex = new RegExp(`##`, 'g');
+        while (match = regex.exec(text)) {
+            if (result.some(m => m.start === match.index + 2 || m.start + m.raw.length === match.index)) {
+                result.push(new MacroInstance(match[0], '', match.index));
+            }
+        }
 
-            });
-
-            return text.replace('#', '');
-        });
+        return result;
     }
 
     constructor(name: string, value: string, args?: string[]) {
@@ -40,29 +122,124 @@ class Define {
     }
 };
 
+class LineMacro extends Macro {
+    find(text: string, defines: Macro[], loc: vscode.Location, inMacro=false): MacroInstance[] {
+        this.value = (loc.range.start.line + 1).toString();
+        return super.find(text ,defines, loc, inMacro);
+    }
+
+    constructor() {
+        super('__LINE__', '<unknown>');
+    }
+}
+
+class FileMacro extends Macro {
+    private cwd: string;
+
+    find(text: string, defines: Macro[], loc: vscode.Location, inMacro=false): MacroInstance[] {
+        this.value = `"${path.relative(this.cwd, loc.uri.fsPath).replace(/\\/g, '\\\\')}"`;
+        return super.find(text, defines, loc, inMacro);
+    }
+
+    constructor(cwd: string) {
+        super('__FILE__', '<unknown>');
+        this.cwd = cwd;
+    }
+}
+
+class CounterMacro extends Macro {
+    private number = 0;
+
+    find(text: string, defines: Macro[], loc: vscode.Location, inMacro=false): MacroInstance[] {
+        this.value = (this.number++).toString();
+        return super.find(text ,defines, loc, inMacro);
+    }
+
+    constructor() {
+        super('__COUNTER__', '0');
+    }
+}
+
+class MacroInstance {
+    raw: string;
+    insert: string;
+    start: number;
+
+    static process(text: string, macros: MacroInstance[]) {
+        let prev: MacroInstance = null;
+        macros = macros.sort((a, b) => a.start - b.start).filter(m => {
+            const result = !prev || (m.start >= prev.start + prev.raw.length);
+            prev = m;
+            return result;
+        });
+
+        // Replace values from back to front:
+        macros.sort((a, b) => b.start - a.start).forEach(m => {
+            text = text.slice(0, m.start) + m.insert + text.slice(m.start + m.raw.length);
+        });
+
+        return text;
+    }
+
+    constructor(raw: string, insert: string, start: number) {
+        this.raw = raw;
+        this.insert = insert;
+        this.start = start;
+    }
+};
+
 class Line {
+    raw: string;
     text: string;
     number: number;
     uri: vscode.Uri;
-    get location(): vscode.Location {
-        return new vscode.Location(this.uri, new vscode.Range(this.number, 0, this.number, this.text.length));
-    }
+    macros: MacroInstance[];
+    location: vscode.Location;
 
     get length(): number {
         return this.text.length;
     }
 
-    constructor(text: string, number: number, uri: vscode.Uri) {
-        this.text = text;
+    remap(range: vscode.Range): vscode.Range;
+    remap(position: vscode.Position): vscode.Position;
+
+    remap(loc: vscode.Position | vscode.Range) {
+        if (loc instanceof vscode.Position) {
+            let offset = 0;
+            this.macros.forEach(m => {
+                if (m.start < loc.character) {
+                    if (m.insert.length > loc.character - m.start) {
+                        offset += loc.character - m.start;
+                    } else {
+                        offset += m.raw.length - m.insert.length;
+                    }
+                }
+            });
+
+            return new vscode.Position(loc.line, loc.character - offset);
+        } else {
+            return new vscode.Range(this.remap(loc.start), this.remap(loc.end));
+        }
+    }
+
+
+    constructor(text: string, number: number, uri: vscode.Uri, env: Macro[]) {
+        this.raw = text;
         this.number = number;
         this.uri = uri;
+        this.macros = [];
+        this.location = new vscode.Location(this.uri, new vscode.Range(this.number, 0, this.number, this.raw.length));
+        env.forEach(d => {
+            this.macros.push(...d.find(text, env, this.location));
+        });
+        this.text = MacroInstance.process(text, this.macros);
     }
 }
 
 type Offset = { line: number, col: number };
 
-class ParserState {
-    defines: Define[];
+export class ParserState {
+    defines: Macro[];
     includes: string[];
     private text: string;
     private offset: Offset;
@@ -83,7 +260,7 @@ class ParserState {
     }
 
     private pushLineDiag(line: Line, message: string, severity: vscode.DiagnosticSeverity=vscode.DiagnosticSeverity.Error, start: number=0, end: number=99999): vscode.Diagnostic {
-        return this.pushUriDiag(line.uri, new vscode.Diagnostic(new vscode.Range(line.number, start, line.number, end), message, severity));
+        return this.pushUriDiag(line.uri, new vscode.Diagnostic(line.remap(new vscode.Range(line.number, start, line.number, end)), message, severity));
     }
 
     private getPrevMatchLine() {
@@ -114,113 +291,261 @@ class ParserState {
             end = this.lines[0].length;
         }
 
-        return new vscode.Location(line.uri, new vscode.Range(line.number, start, line.number, end));
+        return new vscode.Location(line.uri, line.remap(new vscode.Range(line.number, start, line.number, end)));
     }
 
-    pushDiag(message: string, severity: vscode.DiagnosticSeverity=vscode.DiagnosticSeverity.Error): vscode.Diagnostic {
-        var loc = this.location();
+    pushDiag(message: string, severity: vscode.DiagnosticSeverity=vscode.DiagnosticSeverity.Error, loc?: vscode.Location): vscode.Diagnostic {
+        if (!loc) {
+            loc = this.location();
+        }
+
         return this.pushUriDiag(loc.uri, new vscode.Diagnostic(loc.range, message, severity));
     }
 
-    private replaceDefines(text: string) {
+    private replaceDefines(text: string, loc: vscode.Location) {
+        let macros = new Array<MacroInstance>();
         this.defines.forEach(d => {
-            text = d.replace(text);
+            macros.push(...d.find(text, this.defines, loc));
+        });
+        let prev: MacroInstance = null;
+        macros = macros.sort((a, b) => a.start - b.start).filter(m => {
+            const result = !prev || (m.start >= prev.start + prev.raw.length);
+            prev = m;
+            return result;
         });
 
-        return text;
+        return MacroInstance.process(text, macros);
     }
 
-    evaluate(text: string): any {
-        text = this.replaceDefines(text);
-        return eval(text); // Danger! :(
+    evaluate(text: string, loc: vscode.Location): any {
+        text = this.replaceDefines(text, loc);
+        try {
+            return eval(text); // Danger! :(
+        } catch (e) {
+            this.pushDiag('Evaluation failed: ' + e.toString(), vscode.DiagnosticSeverity.Error, loc);
+        }
+
+        return 0;
+    }
+
+    private preprocessGCC(): Line[] {
+        const extensionDevelopmentPath = path.resolve(__dirname, '../../');
+        const args: string[] = [
+            '-fno-diagnostics-show-caret',
+            '-E',
+            ...this.defines.map(d => `-D${d.name}=${d.value}`),
+            ...this.includes.map(i => `-I${i}`),
+            this.uri.fsPath,
+        ];
+        var output = spawnSync('gcc', args, { cwd: extensionDevelopmentPath });
+
+        let location: {line: number, uri?: vscode.Uri};
+
+        output.stderr?.toString('utf-8').split(/\r?\n/g).map(l => {
+            const diag = l.match(/^(.*?):(\d+):(?:(\d+):) (\w+?): (.*)/);
+            if (diag) {
+                let file = path.resolve(extensionDevelopmentPath, diag[1]);
+                let set = this.diags.find(s => s.uri.fsPath === file);
+                if (!set) {
+                    set = {uri: vscode.Uri.file(file), diags: []};
+                    this.diags.push(set);
+                }
+
+                let severity = (diag[4] === 'error') ? vscode.DiagnosticSeverity.Error :
+                               (diag[4] === 'warning') ? vscode.DiagnosticSeverity.Warning :
+                               (diag[4] === 'info') ? vscode.DiagnosticSeverity.Information :
+                               vscode.DiagnosticSeverity.Hint;
+                set.diags.push(new vscode.Diagnostic(new vscode.Range(Number(diag[2]), Number(diag[3]) ?? 0, Number(diag[2]), Number(diag[3]) ?? 0), diag[5], severity))
+            }
+        });
+
+        return output.stdout?.toString('utf-8').split(/\r?\n/g).map(l => {
+            if (l.startsWith('#')) {
+                const jump = l.match(/^# (\d+) "(.*?)"/)
+                if (jump) {
+                    location = {line: Number(jump[1]), uri: jump[2] === '<command-line>' ? undefined : vscode.Uri.file(path.resolve(extensionDevelopmentPath, jump[2]))};
+                }
+                return undefined;
+            }
+
+            if (!location) {
+                return undefined;
+            }
+
+            return new Line(l, location.line++, location.uri, []);
+        }).filter(l => l !== undefined) ?? [];
     }
 
     private preprocess(): Line[] {
+        // return this.preprocessGCC();
         const genLines = (text: string, uri: vscode.Uri): Line[] => {
-            return text.split(/\r?\n/g).map((line, i) => new Line(line, i, uri));
+            return text.split(/\r?\n/g).map((line, i) => new Line(line, i, uri, []));
         };
 
         let rawLines = genLines(this.text, this.uri);
         let lines = new Array<Line>();
-        let conditions: boolean[] = [];
+        let scopes: {line: Line, condition: boolean}[] = [];
         let once = new Array<vscode.Uri>();
 
         while (rawLines.length) {
-            var line = rawLines.splice(0)[0];
-            var text = line.text;
-            while (text.endsWith('\\') && rawLines.length) {
-                text = text.slice(0, text.length) + rawLines.splice(0)[0].text;
-            }
+            let line = rawLines.splice(0, 1)[0];
+            let text = line.text;
 
             try {
-                let directive = text.match(/^\s*#\s*(\w+)\s*(.*)/);
+                text = text.replace(/\/\/.*/, '');
+                text = text.replace(/\/\*.*?\*\//, '');
+
+                let blockComment = text.match(/\/\*.*/);
+                if (blockComment) {
+                    text = text.replace(blockComment[0], '');
+                    while (rawLines) {
+                        let blockEnd = rawLines[0].text.match(/^.*?\*\//);
+                        if (blockEnd) {
+                            rawLines[0].text = rawLines[0].text.slice(blockEnd[0].length);
+                            break;
+                        }
+
+                        rawLines.splice(0, 1);
+                    }
+                }
+
+                let directive = text.match(/^\s*#\s*(\w+)/);
                 if (directive) {
-                    let value = directive[2].trim();
+                    while (text.endsWith('\\') && rawLines.length) {
+                        text = text.slice(0, text.length) + rawLines.splice(0, 1)[0].text;
+                    }
+
+                    let value =  text.match(/^\s*#\s*(\w+)\s*(.*)/)[2].trim();
+
+                    if (directive[1] === 'if') {
+                        if (!value) {
+                            this.pushLineDiag(line, 'Missing condition');
+                            scopes.push({line: line, condition: false});
+                            continue;
+                        }
+
+                        value = value.replace(new RegExp(`defined\\((.*?)\\)`, 'g'), (t, define) => {
+                            return this.defines.some(d => d.name === define) ? '1' : '0';
+                        });
+
+                        scopes.push({line: line, condition: !!this.evaluate(value, line.location)});
+                        continue;
+                    }
+
+                    if (directive[1] === 'ifdef') {
+                        if (!value) {
+                            this.pushLineDiag(line, 'Missing condition');
+                            scopes.push({line: line, condition: false});
+                            continue;
+                        }
+
+                        scopes.push({line: line, condition: this.defines.some(d => d.name === value)});
+                        continue;
+                    }
+
+                    if (directive[1] === 'ifndef') {
+                        if (!value) {
+                            this.pushLineDiag(line, 'Missing condition');
+                            scopes.push({line: line, condition: false});
+                            continue;
+                        }
+
+                        scopes.push({line: line, condition: !this.defines.some(d => d.name === value)});
+                        continue;
+                    }
+
+                    if (directive[1] === 'else') {
+                        if (!scopes.length) {
+                            this.pushLineDiag(line, `Unexpected #else`);
+                            continue;
+                        }
+
+                        scopes[scopes.length - 1].condition = !scopes[scopes.length - 1].condition;
+                        continue;
+                    }
+
+                    if (directive[1] === 'elsif') {
+
+                        if (!scopes.length) {
+                            this.pushLineDiag(line, `Unexpected #elsif`);
+                            continue;
+                        }
+
+                        if (!value) {
+                            this.pushLineDiag(line, 'Missing condition');
+                            scopes.push({line: line, condition: false});
+                            continue;
+                        }
+
+                        if (scopes[scopes.length - 1].condition) {
+                            scopes[scopes.length - 1].condition = false;
+                            continue;
+                        }
+
+                        let condition = this.replaceDefines(value, line.location);
+                        condition = condition.replace(new RegExp(`defined\\((.*?)\\)`, 'g'), (t, define) => {
+                            return this.defines.some(d => d.name === define) ? '1' : '0';
+                        });
+
+                        scopes[scopes.length - 1].condition = this.evaluate(condition, line.location);
+                        continue;
+                    }
+
+                    if (directive[1] === 'endif') {
+                        if (!scopes.length) {
+                            this.pushLineDiag(line, `Unexpected #endif`);
+                            continue;
+                        }
+
+                        scopes.pop();
+                        continue;
+                    }
+
+                    // Skip everything else inside a disabled scope:
+                    if (!scopes.every(c => c.condition)) {
+                        continue;
+                    }
 
                     if (directive[1] === 'define') {
-                        let define = directive[2].match(/^(\w+)\s*(?:\((.*?)\))?\s+(.*)/);
+                        let define = value.match(/^(\w+)(?:\s*\((.*?)\))?\s*(.*)/);
                         if (!define) {
                             this.pushLineDiag(line, 'Invalid define syntax');
                             continue;
                         }
 
-                        this.defines.push(new Define(define[0], define[2], define[1]?.split(',').map(a => a.trim())));
-                    } else if (directive[1] === 'undef') {
+                        let existing = this.defines.find(d => d.name === define[1]);
+                        if (existing) {
+                            this.pushLineDiag(line, 'Duplicate definition');
+                            continue;
+                        }
+
+                        this.defines.push(new Macro(define[1], define[3], define[2]?.split(',').map(a => a.trim())));
+                        continue;
+                    }
+
+                    if (directive[1] === 'undef') {
                         let undef = value.match(/^\w+/);
                         if (!value) {
                             this.pushLineDiag(line, 'Invalid undef syntax');
                             continue;
                         }
 
-                        this.defines = this.defines.filter(d => d.name !== undef[0]);
-                    } else if (directive[1] === 'if') {
-                        let condition = this.replaceDefines(directive[2]);
-                        condition = condition.replace(new RegExp(`defined\\((.*?)\\)`, 'g'), (t, define) => {
-                            return this.defines.some(d => d.name === define) ? '1' : '0';
-                        });
-
-                        conditions.push(!!this.evaluate(condition));
-                    } else if (directive[1] === 'ifdef') {
-                        conditions.push(this.defines.some(d => d.name === value));
-                    } else if (directive[1] === 'ifndef') {
-                        conditions.push(!this.defines.some(d => d.name === value));
-                    } else if (directive[1] === 'else') {
-                        if (!conditions.length) {
-                            this.pushLineDiag(line, `Unexpected #else`);
+                        let index = this.defines.findIndex(d => d.name === undef[0]);
+                        if (index < 0) {
+                            this.pushLineDiag(line, 'Unknown define');
                             continue;
                         }
 
-                        conditions[conditions.length - 1] = !conditions[conditions.length - 1];
-                    } else if (directive[1] === 'elsif') {
-                        if (!conditions.length) {
-                            this.pushLineDiag(line, `Unexpected #elsif`);
-                            continue;
-                        }
+                        this.defines.splice(index, 1);
+                        continue;
+                    }
 
-                        if (conditions[conditions.length - 1]) {
-                            conditions[conditions.length - 1] = false;
-                            continue;
-                        }
-
-                        let condition = this.replaceDefines(directive[2]);
-                        condition = condition.replace(new RegExp(`defined\\((.*?)\\)`, 'g'), (t, define) => {
-                            return this.defines.some(d => d.name === define) ? '1' : '0';
-                        });
-
-                        conditions[conditions.length - 1] = this.evaluate(condition);
-                    } else if (directive[1] === 'endif') {
-                        if (!conditions.length) {
-                            this.pushLineDiag(line, `Unexpected #elsif`);
-                            continue;
-                        }
-
-                        conditions.pop();
-                    } else if (directive[1] === 'pragma') {
+                    if (directive[1] === 'pragma') {
                         if (value === 'once') {
                             if (once.some(uri => uri.fsPath === line.uri.fsPath)) {
                                 let lines = rawLines.findIndex(l => l.uri.fsPath !== line.uri.fsPath);
-                                if (lines >= 0) {
-                                    rawLines.splice(0, lines + 1);
+                                if (lines > 0) {
+                                    rawLines.splice(0, lines);
                                 }
                                 continue;
                             }
@@ -229,32 +554,52 @@ class ParserState {
                         } else {
                             this.pushLineDiag(line, `Unknown pragma directive "${value}"`)
                         }
-                    } else if (directive[1] === 'include') {
-                        let include = directive[2].replace(/["<>]/g, '').trim();
-                        let file = this.includes.find(i => fs.existsSync(i + '/' + include));
-                        if (!file) {
+                        continue;
+                    }
+
+                    if (directive[1] === 'include') {
+                        let include = value.replace(/["<>]/g, '').trim();
+                        if (!include) {
+                            this.pushLineDiag(line, 'Invalid include');
+                            continue;
+                        }
+
+                        let includes = [path.resolve(path.dirname(line.uri.fsPath)), ...this.includes];
+                        let dir = includes.find(i => fs.existsSync(i + path.sep + include));
+                        if (!dir) {
                             this.pushLineDiag(line, `No such file: ${include}`, vscode.DiagnosticSeverity.Warning);
                             continue;
                         }
 
+                        let file = dir + path.sep + include;
                         // inject the included file's lines. They will be the next to be processed:
-                        rawLines = [...genLines(fs.readFileSync(file, 'utf-8'), vscode.Uri.file(file)), ...rawLines];
-                    } else if (directive[1] === 'error') {
-                        this.pushLineDiag(line, directive[2] ?? 'Error');
+                        try {
+                            rawLines = [...genLines(fs.readFileSync(file, 'utf-8'), vscode.Uri.file(file)), ...rawLines];
+                        } catch (e) {
+                            this.pushLineDiag(line, 'Unable to read file');
+                        }
+                        continue;
                     }
 
+                    if (directive[1] === 'error') {
+                        this.pushLineDiag(line, value ?? 'Error');
+                    }
+
+                    this.pushLineDiag(line, 'Unknown preprocessor directive');
                     continue;
                 }
 
-                if (!conditions.every(c => c)) {
+                if (!scopes.every(c => c.condition)) {
                     continue;
                 }
 
-                lines.push(new Line(this.replaceDefines(text), line.number, line.uri));
+                lines.push(new Line(text, line.number, line.uri, this.defines));
             } catch (e) {
-                this.pushLineDiag(line, 'Crashed: ' + e);
+                this.pushLineDiag(line, 'Preprocessor crashed: ' + e);
             }
         }
+
+        scopes.forEach(s => this.pushLineDiag(s.line, 'Unterminated scope'));
 
         return lines;
     }
@@ -322,9 +667,9 @@ class ParserState {
         }).join('\n');
     }
 
-    constructor(text: string, uri: vscode.Uri, defines: Define[]=[], includes: string[]=[]) {
+    constructor(text: string, uri: vscode.Uri, defines: Macro[]=[], includes: string[]=[]) {
         this.text = text;
-        this.defines = defines;
+        this.defines = [new LineMacro(), new FileMacro(vscode.env.appRoot), new CounterMacro(), ...defines];
         this.includes = includes;
         this.uri = uri;
         this.diags = [];
@@ -474,7 +819,6 @@ export class Property {
         this.loc = loc;
         this.labels = labels;
 
-
         state.skipWhitespace();
         var start = state.freeze();
         var value = parsePropValue(state);
@@ -532,15 +876,15 @@ export class NodeEntry {
     properties: Property[];
     labels: string[];
     ref?: string;
-    range: OffsetRange;
-    nameRange: OffsetRange;
+    loc: vscode.Location;
+    nameLoc: vscode.Location;
 
-    constructor(range: OffsetRange, node: Node, nameRange: OffsetRange) {
+    constructor(loc: vscode.Location, node: Node, nameLoc: vscode.Location) {
         this.node = node;
         this.children = [];
         this.properties = [];
-        this.range = range;
-        this.nameRange = nameRange;
+        this.loc = loc;
+        this.nameLoc = nameLoc;
         this.labels = [];
     }
 }
@@ -635,56 +979,8 @@ export class Parser {
 
     cleanFile(doc: vscode.TextDocument) {
         this.nodeArray().forEach(n => {
-            n.entries = n.entries.filter(e => e.range.doc.uri.fsPath !== doc.uri.fsPath);
+            n.entries = n.entries.filter(e => e.loc.uri.fsPath !== doc.uri.fsPath);
         });
-    }
-
-    editFile(edits: vscode.TextDocumentContentChangeEvent[], doc: vscode.TextDocument) {
-        /* TODO: This function is incomplete, and might be abandoned.
-         * Reparsing a whole 50 entry document takes about 50ms on a shitty laptop, which is probably just as fast...
-         */
-
-        /* This algorithm needs an explanation:
-         *
-         * There are a set of text edits with ranges that are being replaced by new text.
-         * We'll collect the offset each edit makes, and mark the position where that change happens. Note that the offset
-         * is negative if we deleted text.
-         *
-         * Then, we'll go through the entries, and calculate the total delta at their position, by accumulating
-         * all the delta up until there. We'll add this to their start positions.
-         * But HOLD ON, the edits are ranges and not positions! Therefore, we'll only do this
-         * with entires that don't overlap with any edits, then mark all the ones that do as "changed".
-         *
-         * The changed entries will be deleted and reparsed.
-         */
-        var offsets = edits.map(e => { return { position: doc.offsetAt(e.range.start), offset: e.text.length - e.rangeLength }; }).sort((a, b) => a.position - b.position);
-
-        var offsetAt = (offset: number) => {
-            var offset = 0;
-            offsets.find(d => {
-                if (d.position > offset) {
-                    return true;
-                }
-                offset += d.offset;
-                return false;
-            });
-
-            return offset;
-        };
-
-
-        var changed: NodeEntry[] = [];
-        this.nodeArray().forEach(n => {
-            n.entries.filter(e => e.range.doc.uri.fsPath === doc.uri.fsPath).forEach(entry => {
-                if (edits.find(edit => entry.range.toRange().intersection(edit.range))) {
-                    changed.push(entry);
-                } else {
-                    entry.range.start += offsetAt(entry.range.start);
-                }
-            });
-        });
-
-        // todo: do something with the changed entries.
     }
 
     parse(text: string, doc: vscode.TextDocument, documentVersion?: number, diags: vscode.Diagnostic[]=[]): NodeEntry[] {
@@ -700,6 +996,7 @@ export class Parser {
         var state = new ParserState(text, doc.uri);
         var nodeStack: NodeEntry[] = [];
         var requireSemicolon = false;
+        var labels = new Array<string>();
         while (state.skipWhitespace()) {
             var blockComment = state.match(/^\/\*[\s\S]*?\*\//);
             if (blockComment) {
@@ -722,6 +1019,115 @@ export class Parser {
                     requireSemicolon = false;
                 }
                 continue;
+            }
+
+            var label = state.match(/^([\w\-]+):\s*/);
+            if (label) {
+                labels.push(label[0]);
+                continue;
+            }
+
+            let name = state.match(/^([#?\w,\.+\-]+)/);
+            if (name) {
+                let nameLoc = state.location();
+
+                let nodeMatch = state.match(/^(?:@([\da-fA-F]+))?\s*{/);
+                if (nodeMatch) {
+                    var node = new Node(name[1],
+                        nodeMatch[1],
+                        nodeStack.length > 0 ? nodeStack[nodeStack.length - 1].node : undefined);
+
+                    if (this.nodes[node.path]) {
+                        node = this.nodes[node.path];
+                    } else {
+                        this.nodes[node.path] = node;
+                    }
+
+                    // find existing alias for this node:
+                    var existingNode: Node;
+                    labels.find(l => {
+                        existingNode = this.nodes['&' + l];
+                        return !!existingNode;
+                    });
+
+                    if (existingNode) {
+                        node.entries.push(...existingNode.entries);
+                        delete this.nodes[existingNode.name];
+                    }
+
+                    let loc = state.location();
+                    let entry = new NodeEntry(nameLoc, node, nameLoc);
+
+                    entry.labels.push(...labels);
+                    node.entries.push(entry);
+
+                    if (nodeStack.length === 0) {
+                        this.docs[doc.uri.fsPath].topLevelEntries.push(entry);
+                    }
+
+                    if (nodeStack[nodeStack.length - 1].children.indexOf(entry) === -1) {
+                        nodeStack[nodeStack.length - 1].children.push(entry);
+                    }
+                    nodeStack.push(entry);
+
+                    if (nodeMatch[1]?.startsWith('0')) {
+                        state.pushDiag(`Address should not start with leading 0's`, vscode.DiagnosticSeverity.Warning);
+                    }
+
+                    labels = [];
+                    continue;
+                }
+
+                state.skipWhitespace();
+                let isProp = state.match(/^\=/);
+                if (isProp) {
+                    if (nodeStack.length > 0) {
+                        var p = new Property(name[0], nameLoc, state, labels);
+                        nodeStack[nodeStack.length - 1].properties.push(p);
+                    } else {
+                        state.pushDiag('Property outside of node context', vscode.DiagnosticSeverity.Error, nameLoc);
+                    }
+
+                    requireSemicolon = true;
+                    labels = [];
+                    continue;
+                }
+            }
+
+            let refMatch = state.match(/^(&[\w\-]+)/);
+            if (refMatch) {
+                let refLoc = state.location();
+                state.skipWhitespace();
+
+                let isNode = state.match(/^{/);
+                if (!isNode) {
+                    state.pushDiag('References can only be made to nodes');
+                    continue;
+                }
+
+                let node = this.getNode(refMatch[1]);
+                if (!node) {
+                    state.pushDiag('Unknown label');
+                    node = new Node(refMatch[1]);
+                    this.nodes[node.name] = node;
+                }
+
+                let entry = new NodeEntry(refLoc, node, refLoc);
+                entry.labels.push(...labels);
+                node.entries.push(entry);
+                entry.ref = refMatch[1];
+                if (nodeStack.length === 0) {
+                    this.docs[doc.uri.fsPath].topLevelEntries.push(entry);
+                }
+
+                nodeStack.push(entry);
+                labels = [];
+                continue;
+            }
+
+            if (labels) {
+                state.pushDiag('Expected node or property after label', vscode.DiagnosticSeverity.Warning);
+                labels = [];
             }
 
             var versionDirective = state.match(/^\/dts-v.+?\/\s*/);
@@ -772,7 +1178,7 @@ export class Parser {
                 }
                 var p = props.find(p => p.name === deleteProp[0]);
                 if (!p) {
-                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset + deleteProp[1].length, deleteProp[0].length).toRange(), `Unknown property ${deleteProp[0]}`, vscode.DiagnosticSeverity.Warning));
+                    state.pushDiag(`Unknown property`, vscode.DiagnosticSeverity.Warning);
                     continue;
                 }
 
@@ -785,130 +1191,35 @@ export class Parser {
                     this.root = new Node('/');
                     this.nodes['/'] = this.root;
                 }
-                var entry = new NodeEntry(new OffsetRange(doc, offset, rootMatch[0].length), this.root, new OffsetRange(doc, offset, 1));
+                var entry = new NodeEntry(state.location(), this.root, new vscode.Location(state.location().uri, state.location().range.start));
                 this.root.entries.push(entry);
                 this.docs[doc.uri.fsPath].topLevelEntries.push(entry);
                 nodeStack.push(entry);
                 continue;
             }
 
-            var nodeMatch = state.match(/^((?:[\w\-]+:\s+)*)([\w,\._+\-]+)(?:@([\da-fA-F]+))?\s*{/);
-            if (nodeMatch) {
-
-                var node = new Node(nodeMatch[2],
-                    nodeMatch[3],
-                    nodeStack.length > 0 ? nodeStack[nodeStack.length - 1].node : undefined);
-
-                if (this.nodes[node.path]) {
-                    node = this.nodes[node.path];
-                } else {
-                    this.nodes[node.path] = node;
-                }
-
-                var labels = nodeMatch[1].split(':').map(l => l.trim()).filter(l => l.length > 0);
-                // find existing alias for this node:
-                var existingNode: Node;
-                labels.find(l => {
-                    existingNode = this.nodes['&' + l];
-                    return !!existingNode;
-                });
-
-                if (existingNode) {
-                    node.entries.push(...existingNode.entries);
-                    delete this.nodes[existingNode.name];
-                }
-
-                var entry = new NodeEntry(
-                    new OffsetRange(doc, offset, nodeMatch[0].length),
-                    node,
-                    new OffsetRange(doc,
-                        offset + (nodeMatch[1] ? nodeMatch[1].length : 0),
-                        nodeMatch[2].length + (nodeMatch[3] ? nodeMatch[3].length + 1 : 0)));
-
-                entry.labels.push(...labels);
-                node.entries.push(entry);
-
-                if (nodeStack.length === 0) {
-                    this.docs[doc.uri.fsPath].topLevelEntries.push(entry);
-                }
-
-                if (nodeStack[nodeStack.length - 1].children.indexOf(entry) === -1) {
-                    nodeStack[nodeStack.length - 1].children.push(entry);
-                }
-                nodeStack.push(entry);
-
-                if (nodeMatch[3] && nodeMatch[3].length > 1 && nodeMatch[3].startsWith('0')) {
-                    diags.push(new vscode.Diagnostic(entry.nameRange.toRange(), `Address should not start with leading 0's`, vscode.DiagnosticSeverity.Warning));
-                }
-                continue;
-            }
-
-            var nodeRefMatch = state.match(/^((?:[\w\-]+:\s+)*)(&[\w\-]+)\s*{/);
-            if (nodeRefMatch) {
-                var node = this.getNode(nodeRefMatch[2]);
-                if (!node) {
-                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset + nodeRefMatch[1].length, nodeRefMatch[2].length).toRange(), `Unknown label ${nodeRefMatch[2]}`, vscode.DiagnosticSeverity.Error));
-                    node = new Node(nodeRefMatch[2]);
-                    this.nodes[node.name] = node;
-                }
-
-                var entry = new NodeEntry(
-                    new OffsetRange(doc, offset, nodeRefMatch[0].length),
-                    node,
-                    new OffsetRange(doc, offset + (nodeRefMatch[1] ? nodeRefMatch[1].length : 0), nodeRefMatch[2].length));
-                entry.labels.push(...nodeRefMatch[1].split(':').map(l => l.trim()).filter(l => l.length > 0));
-                node.entries.push(entry);
-                entry.ref = nodeRefMatch[2];
-                if (nodeStack.length === 0) {
-                    this.docs[doc.uri.fsPath].topLevelEntries.push(entry);
-                }
-                nodeStack.push(entry);
-                continue;
-            }
-
-
-            var preprocessorDirective = state.match(/^#(include|define|include_next|if|else|endif)\b.*?[^\\]\r?\n/);
-            if (preprocessorDirective) {
-                diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset, preprocessorDirective[0].length).toRange(), `C preprocessor directives are not supported`, vscode.DiagnosticSeverity.Warning));
-                continue;
-            }
-
-            var propMatch = state.match(/^((?:[\w\-]+:\s+)*)([#?\w,\._+\-]+)(?:\s*=\s*([^;{}]+))?\s*/);
-            if (propMatch) {
-                if (nodeStack.length > 0) {
-                    var p = new Property(
-                        propMatch[2],
-                        new OffsetRange(doc, offset, propMatch[0].length),
-                        propMatch[1] ? propMatch[1].split(':').map(l => l.trim()) : [],
-                        propMatch[3],
-                        diags);
-                    nodeStack[nodeStack.length - 1].properties.push(p);
-                } else {
-                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset, propMatch[0].length).toRange(), `Property outside of node context`, vscode.DiagnosticSeverity.Error));
-                }
-                requireSemicolon = true;
-                continue;
-            }
             var closingBrace = state.match(/^}/);
             if (closingBrace) {
                 if (nodeStack.length > 0) {
                     var entry = nodeStack.pop();
-                    entry.range.extendTo(offset + closingBrace.length);
+                    entry.loc = new vscode.Location(entry.loc.uri, new vscode.Range(entry.loc.range.start, state.location().range.end));
                 } else {
-                    diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset, closingBrace[0].length).toRange(), `Unexpected closing bracket`, vscode.DiagnosticSeverity.Error));
+                    state.pushDiag('Unexpected closing bracket');
                 }
+
                 requireSemicolon = true;
                 continue;
             }
 
-            var unexpectedToken = state.skipToken();
-            diags.push(new vscode.Diagnostic(new OffsetRange(doc, offset, unexpectedToken.length).toRange(), `Unexpected token ${unexpectedToken}`, vscode.DiagnosticSeverity.Error));
+            state.skipToken();
+            state.pushDiag('Unexpected token');
         }
 
         if (nodeStack.length > 0) {
-            nodeStack[nodeStack.length - 1].range.extendTo(state.offset);
+            let entry = nodeStack[nodeStack.length - 1];
+            entry.loc = new vscode.Location(entry.loc.uri, new vscode.Range(entry.loc.range.start, state.location().range.end));
             console.error(`Unterminated node: ${nodeStack[nodeStack.length - 1].node.name}`);
-            diags.push(new vscode.Diagnostic(nodeStack[nodeStack.length - 1].nameRange.toRange(), `Unterminated node ${nodeStack[nodeStack.length - 1].node.name}`, vscode.DiagnosticSeverity.Error));
+            state.pushDiag('Unterminated node', vscode.DiagnosticSeverity.Error, entry.nameLoc);
         }
 
         var procTime = process.hrtime(timeStart);
@@ -936,7 +1247,7 @@ export class Parser {
     }
 
     getNodeAt(pos: vscode.Position, doc: vscode.TextDocument): Node | undefined {
-        var allNodes = this.nodeArray().filter(n => n.entries.find(e => e.range.contains(pos, doc)));
+        var allNodes = this.nodeArray().filter(n => n.entries.find(e => e.loc.uri.fsPath === doc.uri.fsPath && e.loc.range.contains(pos)));
         if (allNodes.length === 0) {
             return undefined;
         }
@@ -948,8 +1259,7 @@ export class Parser {
 
     getPropertyAt(pos: vscode.Position, doc: vscode.TextDocument): [Node, Property] | undefined {
         var node = this.getNodeAt(pos, doc);
-
-        var prop = node?.properties().find(p => p.range.doc.uri.fsPath === doc.uri.fsPath && p.range.toRange().contains(pos));
+        var prop = node?.properties().find(p => p.loc.uri.fsPath === doc.uri.fsPath && p.loc.range.contains(pos));
         if (prop) {
             return [node, prop];
         }

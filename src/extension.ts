@@ -219,11 +219,11 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
     }
 
     addMissing(entry: parser.NodeEntry, propType: types.PropertyType) {
-        if (!vscode.window.activeTextEditor || vscode.window.activeTextEditor.document.uri.fsPath !== entry.range.doc.uri.fsPath) {
+        if (!vscode.window.activeTextEditor || vscode.window.activeTextEditor.document.uri.fsPath !== entry.loc.uri.fsPath) {
             return;
         }
         var indent = vscode.window.activeTextEditor.options.insertSpaces ? ' '.repeat(vscode.window.activeTextEditor.options.tabSize as number) : '\t';
-        var line = entry.range.toRange().end.line;
+        var line = entry.loc.range.end.line;
         var snippet = new vscode.SnippetString(`\n${indent}${propType.name} = `);
         appendPropSnippet(propType, snippet, entry.node.parent, entry.node.parent && this.types.nodeType(entry.node.parent), entry.node);
         vscode.window.activeTextEditor.insertSnippet(snippet, new vscode.Position(line - 1, 99999999));
@@ -269,33 +269,33 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             if (node.fullName === 'aliases' || node.fullName === 'chosen') {
                 if (node.path === '/aliases/' || node.path === '/chosen/') {
                     if (node.children().length > 0) {
-                        diags.push(new vscode.Diagnostic(entry.nameRange.toRange(), `Node ${node.name} shouldn't have child nodes`, vscode.DiagnosticSeverity.Error));
+                        diags.push(new vscode.Diagnostic(entry.nameLoc.range, `Node ${node.name} shouldn't have child nodes`, vscode.DiagnosticSeverity.Error));
                     }
 
                     entry.properties.forEach(p => {
                         if (p.value.raw.startsWith('&')) {
                             var ref = this.parser.getNode(p.value.raw);
                             if (!ref) {
-                                diags.push(new vscode.Diagnostic(p.range.toRange(), `Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error));
+                                diags.push(new vscode.Diagnostic(p.loc.range, `Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error));
                             }
                         } else if (typeof p.value.value === 'string') {
                             var ref = this.parser.getNode(p.value.value);
                             if (!ref) {
-                                diags.push(new vscode.Diagnostic(p.range.toRange(), `Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error));
+                                diags.push(new vscode.Diagnostic(p.loc.range, `Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error));
                             }
                         } else {
-                            diags.push(new vscode.Diagnostic(p.range.toRange(), `Properties in ${node.name} must be references to nodes`, vscode.DiagnosticSeverity.Error));
+                            diags.push(new vscode.Diagnostic(p.loc.range, `Properties in ${node.name} must be references to nodes`, vscode.DiagnosticSeverity.Error));
                         }
                     });
                 } else {
-                    diags.push(new vscode.Diagnostic(entry.nameRange.toRange(), `Node ${node.name} must be under the root node`, vscode.DiagnosticSeverity.Error));
+                    diags.push(new vscode.Diagnostic(entry.nameLoc.range, `Node ${node.name} must be under the root node`, vscode.DiagnosticSeverity.Error));
                 }
                 return;
             }
 
             if (node.fullName === 'cpus') {
                 if (node.path !== '/cpus/') {
-                    diags.push(new vscode.Diagnostic(entry.nameRange.toRange(), `Node cpus must be directly under the root node`, vscode.DiagnosticSeverity.Error));
+                    diags.push(new vscode.Diagnostic(entry.nameLoc.range, `Node cpus must be directly under the root node`, vscode.DiagnosticSeverity.Error));
                 }
             }
 
@@ -310,13 +310,13 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                         let range = {n: c, start: reg.value.value[0], size: reg.value.value[1]};
                         let overlap = ranges.find(r => r.start + r.size > range.start && range.start + range.size > r.start);
                         if (overlap) {
-                            let diag = new vscode.Diagnostic(c.nameRange.toRange(), `Range overlaps with ${overlap.n.node.fullName}`, vscode.DiagnosticSeverity.Warning);
+                            let diag = new vscode.Diagnostic(c.nameLoc.range, `Range overlaps with ${overlap.n.node.fullName}`, vscode.DiagnosticSeverity.Warning);
                             if (overlap.start < range.start) {
                                 diag.message += ` (ends at 0x${(overlap.start + overlap.size).toString(16)})`;
                             } else {
                                 diag.message += ` (${c.node.fullName} ends at 0x${(range.start + range.size).toString(16)})`;
                             }
-                            diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(overlap.n.nameRange.doc.uri, overlap.n.nameRange.toRange()), `${overlap.n.node.fullName} declared here`)];
+                            diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(overlap.n.nameLoc.uri, overlap.n.nameLoc.range), `${overlap.n.node.fullName} declared here`)];
                             diags.push(diag);
                         }
 
@@ -326,12 +326,12 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             }
 
             if (!type) {
-                diags.push(new vscode.Diagnostic(entry.nameRange.toRange(), `Unknown node type`, vscode.DiagnosticSeverity.Warning));
+                diags.push(new vscode.Diagnostic(entry.nameLoc.range, `Unknown node type`, vscode.DiagnosticSeverity.Warning));
                 return;
             }
 
             if (type['on-bus'] && type['on-bus'] !== parentType?.['bus']) {
-                diags.push(new vscode.Diagnostic(entry.nameRange.toRange(), `Node should only occur on the ${type['on-bus']} bus.`, vscode.DiagnosticSeverity.Error));
+                diags.push(new vscode.Diagnostic(entry.nameLoc.range, `Node should only occur on the ${type['on-bus']} bus.`, vscode.DiagnosticSeverity.Error));
             }
 
             type.properties.forEach(propType => {
@@ -369,25 +369,25 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
                         if (Array.isArray(propType.type)) {
                             if (!propType.type.find(correctType)) {
-                                diags.push(new vscode.Diagnostic(prop.range.toRange(), 'Property value type must be one of ' + propType.type.join(', '), vscode.DiagnosticSeverity.Warning));
+                                diags.push(new vscode.Diagnostic(prop.loc.range, 'Property value type must be one of ' + propType.type.join(', '), vscode.DiagnosticSeverity.Warning));
                             }
                         } else if (!correctType(propType.type)) {
-                            diags.push(new vscode.Diagnostic(prop.range.toRange(), `Property value type must be ${propType.type}`, vscode.DiagnosticSeverity.Warning));
+                            diags.push(new vscode.Diagnostic(prop.loc.range, `Property value type must be ${propType.type}`, vscode.DiagnosticSeverity.Warning));
                         }
 
                         if (propType.enum && propType.enum.indexOf(prop.value.value.toString()) < 0) {
-                            diags.push(new vscode.Diagnostic(prop.range.toRange(), 'Property value must be one of ' + propType.enum.join(', '), vscode.DiagnosticSeverity.Warning));
+                            diags.push(new vscode.Diagnostic(prop.loc.range, 'Property value must be one of ' + propType.enum.join(', '), vscode.DiagnosticSeverity.Warning));
                         }
 
                         if (propType.const !== undefined && propType.const !== prop.value.value) {
-                            diags.push(new vscode.Diagnostic(prop.range.toRange(), `Property value must be ${propType.const}`, vscode.DiagnosticSeverity.Warning));
+                            diags.push(new vscode.Diagnostic(prop.loc.range, `Property value must be ${propType.const}`, vscode.DiagnosticSeverity.Warning));
                         }
 
                         if (propType.type === 'phandle-array') {
-                            var propText = doc.getText(prop.range.toRange()) as string;
+                            var propText = doc.getText(prop.loc.range) as string;
                             (<(string | number)[]>prop.value.value).forEach(e => {
                                 if (typeof e === 'string' && !this.parser.getPHandleNode(e.slice(1))) {
-                                    diags.push(new vscode.Diagnostic(new parser.OffsetRange(doc, prop.range.start + propText.indexOf(e)).toRange(), `Unknown label`, vscode.DiagnosticSeverity.Warning));
+                                    diags.push(new vscode.Diagnostic(prop.loc.range, `Unknown label`, vscode.DiagnosticSeverity.Warning));
                                 }
                             })
                         }
@@ -399,29 +399,29 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                                 if ((typeof prop.value.value === 'number' && cells.length !== 1) ||
                                     (Array.isArray(prop.value.value) && prop.value.value.length !== cells.length)) {
                                     diags.push(new vscode.Diagnostic(
-                                        prop.range.toRange(),
+                                        prop.loc.range,
                                         `reg property must be on format <${cells.join(' ')}>`,
                                         vscode.DiagnosticSeverity.Error));
                                 } else if (cells.length > 0 && cells[0] === 'addr' && node.address !== NaN && node.address !== prop.value.value && node.address !== prop.value.value[0]) {
                                     diags.push(new vscode.Diagnostic(
-                                        prop.range.toRange(),
+                                        prop.loc.range,
                                         `Node address does not match address cell (expected 0x${node.address.toString(16)})`,
                                         vscode.DiagnosticSeverity.Warning));
                                 }
                             } else {
                                 diags.push(new vscode.Diagnostic(
-                                    prop.range.toRange(),
+                                    prop.loc.range,
                                     `Unable to fetch addr and size count`,
                                     vscode.DiagnosticSeverity.Error));
 
                             }
                         } else if (prop.name === 'compatible') {
-                            var propText = doc.getText(prop.range.toRange());
+                            var propText = doc.getText(prop.loc.range);
                             var types: string[] = typeof prop.value.value === 'string' ? [prop.value.value] : prop.value.value as string[];
                             var type = types.map(t => {
                                 var type = this.types.get(t, node.name);
                                 if (!type) {
-                                    var range = doc.getWordRangeAtPosition(doc.positionAt(prop.range.start + propText.indexOf(`"${t}"`)), /".*?"/);
+                                    var range = doc.getWordRangeAtPosition(prop.loc.range.start);
                                     diags.push(new vscode.Diagnostic(range, `Unknown node type ${t}`, vscode.DiagnosticSeverity.Warning));
                                 }
                                 return type;
@@ -430,7 +430,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                             if (type && type['parent-bus'] && parentType) {
                                 if (parentType['child-bus'] !== type['parent-bus']) {
                                     diags.push(new vscode.Diagnostic(
-                                        entry.nameRange.toRange(),
+                                        entry.nameLoc.range,
                                         `Invalid bus: Node exists on bus "${type['parent-bus']}", parent bus is "${parentType['child-bus']}" `,
                                         vscode.DiagnosticSeverity.Error));
                                 }
@@ -438,10 +438,10 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
                         } else if (prop.name === 'status') {
                             if (prop.value.value === 'disabled') {
-                                node.entries.filter(e => e.range.doc.uri.fsPath === doc.uri.fsPath).forEach(e => {
-                                    var diag = new vscode.Diagnostic(e.nameRange.toRange(), `Disabled`, vscode.DiagnosticSeverity.Hint);
+                                node.entries.filter(e => e.loc.uri.fsPath === doc.uri.fsPath).forEach(e => {
+                                    var diag = new vscode.Diagnostic(e.nameLoc.range, `Disabled`, vscode.DiagnosticSeverity.Hint);
                                     diag.tags = [vscode.DiagnosticTag.Unnecessary];
-                                    diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(prop.range.doc.uri, prop.range.toRange()), `Disabled here`)];
+                                    diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(prop.loc.uri, prop.loc.range), `Disabled here`)];
                                     diags.push(diag);
                                 });
                             }
@@ -451,24 +451,24 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                                 var value = c.value.value as (string | number)[];
                                 if (typeof c.value.value === 'number') {
                                     if ((value.length % (c.value.value + 1)) !== 0) {
-                                        diags.push(new vscode.Diagnostic(prop.range.toRange(), `PHandle array must have ${c.value.value} number cells`, vscode.DiagnosticSeverity.Error));
+                                        diags.push(new vscode.Diagnostic(prop.loc.range, `PHandle array must have ${c.value.value} number cells`, vscode.DiagnosticSeverity.Error));
                                     }
                                 } else {
-                                    diags.push(new vscode.Diagnostic(prop.range.toRange(), `Parent's *-cells property must be an int`, vscode.DiagnosticSeverity.Error));
+                                    diags.push(new vscode.Diagnostic(prop.loc.range, `Parent's *-cells property must be an int`, vscode.DiagnosticSeverity.Error));
                                 }
                             }
                         }
                     }
                 } else if (propType.required) {
                     var status = props.find(p => p.name === 'status');
-                    var diag = new vscode.Diagnostic(entry.nameRange.toRange(), `Property "${propType.name}" is required`, (status && status.value.raw === 'okay') ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Information);
+                    var diag = new vscode.Diagnostic(entry.nameLoc.range, `Property "${propType.name}" is required`, (status && status.value.raw === 'okay') ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Information);
                     diags.push(diag);
                 }
             });
 
             entry.properties.forEach(p => {
                 if (!type.properties.find(t => t.name === p.name)) {
-                    diags.push(new vscode.Diagnostic(p.range.toRange(), `Property not mentioned in type "${type.name ?? parentType.name + '::child-node'}"`, vscode.DiagnosticSeverity.Warning));
+                    diags.push(new vscode.Diagnostic(p.loc.range, `Property not mentioned in type "${type.name ?? parentType.name + '::child-node'}"`, vscode.DiagnosticSeverity.Warning));
                 }
             });
         }
@@ -511,10 +511,10 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
         var symbols: vscode.SymbolInformation[] = [];
         this.parser.nodeArray().forEach(n => {
-            n.entries.filter(e => e.range.doc.uri.fsPath === document.uri.fsPath).map(e => {
-                var node = new vscode.SymbolInformation(e.node.fullName, vscode.SymbolKind.Class, e.node.parent && e.node.parent.fullName, new vscode.Location(document.uri, e.range.toRange()));
+            n.entries.filter(e => e.loc.uri.fsPath === document.uri.fsPath).map(e => {
+                var node = new vscode.SymbolInformation(e.node.fullName, vscode.SymbolKind.Class, e.node.parent && e.node.parent.fullName, new vscode.Location(document.uri, e.loc.range));
                 symbols.push(node);
-                symbols.push(...e.properties.map(p => new vscode.SymbolInformation(p.name, propSymbolKind(p), e.node.fullName, new vscode.Location(document.uri, p.range.toRange()))));
+                symbols.push(...e.properties.map(p => new vscode.SymbolInformation(p.name, propSymbolKind(p), e.node.fullName, new vscode.Location(document.uri, p.loc.range))));
             });
         });
         return symbols;
@@ -596,7 +596,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             return new vscode.Hover(results, word);
         }
 
-        var entry = node.entries.find(e => e.nameRange.contains(position, document));
+        var entry = node.entries.find(e => e.nameLoc.uri.fsPath === document.uri.fsPath && e.nameLoc.range.contains(position));
         if (entry) {
             var results: vscode.MarkedString[] = [];
             if (type.title) {
@@ -628,8 +628,8 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         var bundle = this.getNodeDefinition(document, position);
         if (bundle) {
             return bundle[1].entries
-                .filter(e => !e.range.toRange().contains(position))
-                .map(e => new vscode.Location(e.range.doc.uri, e.range.toRange()));
+                .filter(e => !e.loc.range.contains(position))
+                .map(e => new vscode.Location(e.loc.uri, e.loc.range));
         }
 
         var word = document.getWordRangeAtPosition(position, /"[\w,\-]+"/);
@@ -924,13 +924,10 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             return;
         }
 
-        var text = document.getText(prop[1].range.toRange());
+        var text = document.getText(prop[1].loc.range);
         var rawVal = prop[1].value.raw.slice(1);
-        var offset = prop[1].range.start + text.indexOf(rawVal);
+        var offset = document.offsetAt(prop[1].loc.range.start);
         var cursorOffset = document.offsetAt(position);
-        if (cursorOffset < offset) {
-            return;
-        }
 
         var paramValues: string[] = [];
         var paramStarts: number[] = [];
@@ -943,7 +940,6 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                 rawVal = rawVal.slice(whitespace[0].length);
                 continue;
             }
-
 
             if (rawVal.match(/^\(/)) {
                 var paramValue = '(';

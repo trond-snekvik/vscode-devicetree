@@ -46,9 +46,9 @@ function getBindingDirs(): string[] {
 }
 
 function getAutoIncludes(dir: string): string[] {
-    var patterns = getConfig('autoincludes') as string[];
-    patterns = patterns.map(p => {
-        return p.replace(/\${(.+?)}/g, (fullMatch: string, variable: string) => {
+    // var patterns = getConfig('autoincludes') as string[];
+    var patterns = ['${workspaceFolder}/boards/arm/nrf52_pca10040/nrf52_pca10040.dts'];
+    patterns = patterns.map(p => p.replace(/\${(.+?)}/g, (fullMatch: string, variable: string) => {
             if (variable.startsWith('workspaceFolder')) {
                 if (vscode.workspace.workspaceFolders.length === 0) {
                     return '';
@@ -66,8 +66,8 @@ function getAutoIncludes(dir: string): string[] {
             }
 
             return fullMatch;
-        });
-    })
+    }));
+
     return glob.sync('{' + patterns.join(',') + ',}', {cwd: dir, absolute: true, nosort: true}).map(p => path.resolve(dir, p));
 }
 
@@ -258,6 +258,8 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         var diags: vscode.Diagnostic[] = [];
 
         var topLevelEntries = this.parser.parse(doc.getText(), doc, doc.version, diags);
+
+        diags = this.parser.docs[doc.uri.fsPath].diags;
 
         var annotateNode = (entry: parser.NodeEntry, parentType?: types.NodeType) => {
             var node = entry.node;

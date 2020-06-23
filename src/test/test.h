@@ -14,11 +14,12 @@
 #endif
 
 #ifdef YES
-#define SOME_LARGE_NUMBER 999
+#define SOME_LARGE_NUMBER 9999
 #endif
 
 #if SOME_LARGE_NUMBER > SOME_SUM
 //comments are not included
+SOME_LARGE_NUMBER is higher than SOME_SUM
 #endif
 
 #ifdef HELLO

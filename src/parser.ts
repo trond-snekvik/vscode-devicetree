@@ -1,14 +1,46 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import { setFlagsFromString } from 'v8';
 import * as path from 'path';
-import { execSync, spawnSync } from 'child_process';
+import { spawnSync } from 'child_process';
 
 type PHandle = {node: string};
 type _PHandleArray = (string | number)[];
 type PHandleArray = _PHandleArray | _PHandleArray[];
 type _PropertyValue = string | number | boolean | PHandle | PHandle[] | PHandleArray[] | number[];
 export type PropertyValue = _PropertyValue | _PropertyValue[]; // composite
+
+export function evaluateExpr(expr: string, start: vscode.Position, diags: vscode.Diagnostic[]) {
+    expr = expr.trim().replace(/([\d\.]+|0x[\da-f]+)[ULf]+/gi, '$1');
+    var m: RegExpMatchArray;
+    var level = 0;
+    var text = '';
+    while ((m = expr.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+\-\/*]|\s*|0x[\da-fA-F]+|[\d\.]+)\s*)*([()]?)/)) && m[0].length) {
+        text += m[0];
+        if (m[1] === '(') {
+            level++;
+        } else if (m[1] === ')') {
+            if (!level) {
+                return undefined;
+            }
+
+            level--;
+        }
+
+        expr = expr.slice(m.index + m[0].length);
+    }
+
+    if (!text || level || expr) {
+        diags.push(new vscode.Diagnostic(new vscode.Range(start.line, start.character + m.index, start.line, start.character + m.index), `Unterminated expression`));
+        return undefined;
+    }
+
+    try {
+        return eval(text);
+    } catch (e) {
+        diags.push(new vscode.Diagnostic(new vscode.Range(start.line, start.character, start.line, start.character + text.length), `Unable to evaluate expression`));
+        return undefined;
+    }
+}
 
 export class Macro {
     name: string;
@@ -320,7 +352,10 @@ export class ParserState {
     evaluate(text: string, loc: vscode.Location): any {
         text = this.replaceDefines(text, loc);
         try {
-            return eval(text); // Danger! :(
+            let diags = new Array<vscode.Diagnostic>();
+            let result = evaluateExpr(text, loc.range.start, diags);
+            diags.forEach(d => this.pushDiag(d.message, d.severity, new vscode.Location(loc.uri, d.range)));
+            return result;
         } catch (e) {
             this.pushDiag('Evaluation failed: ' + e.toString(), vscode.DiagnosticSeverity.Error, loc);
         }
@@ -583,9 +618,11 @@ export class ParserState {
 
                     if (directive[1] === 'error') {
                         this.pushLineDiag(line, value ?? 'Error');
+                        continue;
                     }
+                }
 
-                    this.pushLineDiag(line, 'Unknown preprocessor directive');
+                if (!text) {
                     continue;
                 }
 
@@ -619,13 +656,21 @@ export class ParserState {
         return match;
     }
 
+    eof(): boolean {
+        return this.offset.line === this.lines.length;
+    }
+
+    get next(): string {
+        return this.lines[this.offset.line].text.slice(this.offset.col);
+    }
+
     skipWhitespace() {
-        this.match(/^\s+/);
-        return this.text.length > 0;
+        while (this.match(/^\s+/));
+        return !this.eof();
     }
 
     skipToken() {
-        var match = this.match(/^\S+/);
+        var match = this.match(/^[#-\w]+|./);
         if (!match) {
             this.offset.line = this.lines.length;
             return '';
@@ -639,7 +684,7 @@ export class ParserState {
             return undefined;
         }
 
-        return this.lines[this.offset.line].text.slice(this.offset.col).match(pattern);
+        return this.next.match(pattern);
     }
 
     freeze(): Offset {
@@ -647,7 +692,7 @@ export class ParserState {
     }
 
     since(state: Offset) {
-        return this.lines.slice(state.line, this.offset.line).map((l, i) => {
+        return this.lines.slice(state.line, this.offset.line + 1).map((l, i) => {
             var start = 0;
             var end = l.length;
 
@@ -682,10 +727,16 @@ function parsePropValue(state: ParserState) {
     var elems: _PropertyValue[] = [];
 
     while (state.skipWhitespace()) {
+        if (state.peek(/^;/)) {
+            break;
+        }
+
         if (elems.length > 0) {
             if (!state.match(/^,\s*/)) {
                 state.pushDiag(`Expected , or ;`);
             }
+
+            state.skipWhitespace();
         }
 
         var phandle = state.match(/^<\s*&([\w\-]+)\s*>/);
@@ -746,7 +797,7 @@ function parsePropValue(state: ParserState) {
                     var level = 1;
                     var text = '(';
                     while (level !== 0) {
-                        m = state.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+\-\/*]|\s*|0x[\da-fA-F]+|\d+)\s*)*([()])/);
+                        m = state.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+\-\/*]|\s*|0x[\da-fA-F]+|[\d\.]+)\s*)*([()])/);
                         if (!m) {
                             state.pushDiag(`Unterminated expression`);
                             break;
@@ -768,6 +819,7 @@ function parsePropValue(state: ParserState) {
                     }
                     continue;
                 }
+
                 m = state.match(/^>/);
                 if (m) {
                     break;
@@ -989,6 +1041,7 @@ export class Parser {
                 diags.push(...this.docs[doc.uri.fsPath].diags);
                 return this.docs[doc.uri.fsPath].topLevelEntries; /* No need to reparse */
             }
+
             this.docs[doc.uri.fsPath] = {version: documentVersion, topLevelEntries: [], diags: []};
         }
         var timeStart = process.hrtime();
@@ -1023,7 +1076,7 @@ export class Parser {
 
             var label = state.match(/^([\w\-]+):\s*/);
             if (label) {
-                labels.push(label[0]);
+                labels.push(label[1]);
                 continue;
             }
 
@@ -1092,6 +1145,9 @@ export class Parser {
                     labels = [];
                     continue;
                 }
+
+                state.pushDiag('Expected node or property value');
+                continue;
             }
 
             let refMatch = state.match(/^(&[\w\-]+)/);
@@ -1107,7 +1163,7 @@ export class Parser {
 
                 let node = this.getNode(refMatch[1]);
                 if (!node) {
-                    state.pushDiag('Unknown label');
+                    state.pushDiag('Unknown label', vscode.DiagnosticSeverity.Error, refLoc);
                     node = new Node(refMatch[1]);
                     this.nodes[node.name] = node;
                 }
@@ -1125,7 +1181,7 @@ export class Parser {
                 continue;
             }
 
-            if (labels) {
+            if (labels.length) {
                 state.pushDiag('Expected node or property after label', vscode.DiagnosticSeverity.Warning);
                 labels = [];
             }
@@ -1226,7 +1282,7 @@ export class Parser {
 
         console.log(`Parsed ${doc.uri.fsPath} in ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
 
-        this.docs[doc.uri.fsPath].diags = [...diags];
+        this.docs[doc.uri.fsPath].diags = state.diags.find(d => d.uri.fsPath === doc.uri.fsPath)?.diags ?? [];
         return this.docs[doc.uri.fsPath].topLevelEntries;
     }
 

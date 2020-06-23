@@ -12,6 +12,7 @@ right here
 
 
 
+9999 is higher than 123 + 456
 
 
 SHOULD BE INCLUDED
@@ -39,5 +40,5 @@ firstsecond test_first second_test test_firstsecond_test
 1, 2,  
 1, 2 
 
-current line: 68
-current file: "..\\..\\..\\..\\Users\\trond\\dev\\vscode\\vscode-devicetree\\src\\test\\test.h"
+current line: 69
+current file: "..\\..\\..\\..\\Users\\Trond\\dev\\vscode_extensions\\devicetree\\src\\test\\test.h"

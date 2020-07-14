@@ -2,7 +2,7 @@ import * as yaml from 'js-yaml';
 import * as glob from 'glob';
 import * as vscode from 'vscode';
 import { readFileSync, fstat } from 'fs';
-import { Node, Property } from './parser';
+import { Node, Property, ParserState } from './parser';
 import { Diagnostic, DiagnosticSeverity } from 'vscode';
 
 export type PropertyTypeString = 'string' | 'int' | 'boolean' | 'array' | 'compound' | 'phandle' | 'string-array' | 'phandle-array' | 'uint8-array';
@@ -456,7 +456,7 @@ export class TypeLoader {
     }
 
 
-    nodeType(node: Node, parentType?: NodeType, diags: Diagnostic[]=[]): NodeType {
+    nodeType(node: Node, parentType?: NodeType, parser?: ParserState): NodeType {
         var props = node.properties();
 
         var getBaseType = () => {
@@ -484,18 +484,18 @@ export class TypeLoader {
                         });
                         return n;
                     }
-                    diags.push(new Diagnostic(compatible.loc.range, `Property compatible must be an array of strings`, DiagnosticSeverity.Warning));
+                    parser?.pushDiag(`Property compatible must be an array of strings`, DiagnosticSeverity.Warning, compatible.loc);
                 } else {
-                    diags.push(new Diagnostic(compatible.loc.range, `Property compatible must be a string or an array of strings`, DiagnosticSeverity.Warning));
+                    parser?.pushDiag(`Property compatible must be a string or an array of strings`, DiagnosticSeverity.Warning, compatible.loc);
                 }
-                diags.push(new Diagnostic(compatible.loc.range, `Unknown type ${compatible.value.raw}`, DiagnosticSeverity.Warning));
+                parser?.pushDiag(`Unknown type ${compatible.value.raw}`, DiagnosticSeverity.Warning, compatible.loc);
                 return;
             }
 
             if (parentType && parentType['child-binding']) {
                 return parentType['child-binding'];
             }
-            diags.push(...node.entries.map(e => new Diagnostic(e.nameLoc.range, `Missing "compatible" property`, DiagnosticSeverity.Warning)));
+            node.entries.forEach(e => parser?.pushDiag(`Missing "compatible" property`, DiagnosticSeverity.Warning, e.nameLoc));
         };
 
         var type = getBaseType();

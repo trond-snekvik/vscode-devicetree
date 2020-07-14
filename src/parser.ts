@@ -2,11 +2,13 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
+import { isArray } from 'util';
 
 type PHandle = {node: string};
 type _PHandleArray = (string | number)[];
 type PHandleArray = _PHandleArray | _PHandleArray[];
 type _PropertyValue = string | number | boolean | PHandle | PHandle[] | PHandleArray[] | number[];
+export type DiagCollection = {uri: vscode.Uri, diags: vscode.Diagnostic[]};
 export type PropertyValue = _PropertyValue | _PropertyValue[]; // composite
 
 export function evaluateExpr(expr: string, start: vscode.Position, diags: vscode.Diagnostic[]) {
@@ -46,8 +48,14 @@ export class Macro {
     name: string;
     value: string;
     args?: string[]
+    definition?: Line;
+    undef?: Line;
 
     find(text: string, defines: Macro[], loc: vscode.Location, inMacro=false): MacroInstance[] {
+        if (!text.includes(this.name)) {
+            return [];
+        }
+
         let insertText: string;
         let match: RegExpExecArray;
         let result = new Array<MacroInstance>();
@@ -131,24 +139,25 @@ export class Macro {
                 macroArgs.forEach(arg => {
                     macros.push(...arg.find(replaceText, macroArgs, loc, true));
                 });
-                result.push(new MacroInstance(raw, MacroInstance.process(replaceText, macros), match.index));
+                result.push(new MacroInstance(this, raw, MacroInstance.process(replaceText, macros), match.index));
             } else {
-                result.push(new MacroInstance(match[0], replaceText, match.index));
+                result.push(new MacroInstance(this, match[0], replaceText, match.index));
             }
         }
 
         regex = new RegExp(`##`, 'g');
         while (match = regex.exec(text)) {
             if (result.some(m => m.start === match.index + 2 || m.start + m.raw.length === match.index)) {
-                result.push(new MacroInstance(match[0], '', match.index));
+                result.push(new MacroInstance(this, match[0], '', match.index));
             }
         }
 
         return result;
     }
 
-    constructor(name: string, value: string, args?: string[]) {
+    constructor(name: string, value: string, definition?: Line, args?: string[]) {
         this.name = name;
+        this.definition = definition;
         this.value = value;
         this.args = args;
     }
@@ -196,6 +205,7 @@ class MacroInstance {
     raw: string;
     insert: string;
     start: number;
+    macro: Macro;
 
     static process(text: string, macros: MacroInstance[]) {
         let prev: MacroInstance = null;
@@ -213,7 +223,8 @@ class MacroInstance {
         return text;
     }
 
-    constructor(raw: string, insert: string, start: number) {
+    constructor(macro: Macro, raw: string, insert: string, start: number) {
+        this.macro = macro;
         this.raw = raw;
         this.insert = insert;
         this.start = start;
@@ -261,7 +272,7 @@ class Line {
         this.uri = uri;
         this.macros = [];
         this.location = new vscode.Location(this.uri, new vscode.Range(this.number, 0, this.number, this.raw.length));
-        env.forEach(d => {
+        env.filter(d => !d.undef).forEach(d => {
             this.macros.push(...d.find(text, env, this.location));
         });
         this.text = MacroInstance.process(text, this.macros);
@@ -276,18 +287,17 @@ export class ParserState {
     private text: string;
     private offset: Offset;
     private prevMatch: string;
-    diags: {uri: vscode.Uri, diags: vscode.Diagnostic[]}[];
+    diags: {[path: string]: DiagCollection};
+    fileInclusions: {line: Line, file: vscode.Uri}[];
     lines: Line[];
     uri: vscode.Uri;
 
     private pushUriDiag(uri: vscode.Uri, diag: vscode.Diagnostic) {
-        var collection = this.diags.find(c => c.uri.fsPath === uri.fsPath);
-        if (!collection) {
-            collection = {uri: uri, diags: [] };
-            this.diags.push(collection);
+        if (!(uri.fsPath in this.diags)) {
+            this.diags[uri.fsPath] = {uri: uri, diags: []};
         }
 
-        collection.diags.push(diag);
+        this.diags[uri.fsPath].diags.push(diag);
         return diag;
     }
 
@@ -336,7 +346,7 @@ export class ParserState {
 
     private replaceDefines(text: string, loc: vscode.Location) {
         let macros = new Array<MacroInstance>();
-        this.defines.forEach(d => {
+        this.defines.filter(d => !d.undef).forEach(d => {
             macros.push(...d.find(text, this.defines, loc));
         });
         let prev: MacroInstance = null;
@@ -380,17 +390,16 @@ export class ParserState {
             const diag = l.match(/^(.*?):(\d+):(?:(\d+):) (\w+?): (.*)/);
             if (diag) {
                 let file = path.resolve(extensionDevelopmentPath, diag[1]);
-                let set = this.diags.find(s => s.uri.fsPath === file);
-                if (!set) {
-                    set = {uri: vscode.Uri.file(file), diags: []};
-                    this.diags.push(set);
+                let uri = vscode.Uri.file(file);
+                if (!(uri.fsPath in this.diags)) {
+                    this.diags[uri.fsPath] = {uri: uri, diags: []};
                 }
 
                 let severity = (diag[4] === 'error') ? vscode.DiagnosticSeverity.Error :
                                (diag[4] === 'warning') ? vscode.DiagnosticSeverity.Warning :
                                (diag[4] === 'info') ? vscode.DiagnosticSeverity.Information :
                                vscode.DiagnosticSeverity.Hint;
-                set.diags.push(new vscode.Diagnostic(new vscode.Range(Number(diag[2]), Number(diag[3]) ?? 0, Number(diag[2]), Number(diag[3]) ?? 0), diag[5], severity))
+                this.diags[uri.fsPath].diags.push(new vscode.Diagnostic(new vscode.Range(Number(diag[2]), Number(diag[3]) ?? 0, Number(diag[2]), Number(diag[3]) ?? 0), diag[5], severity));
             }
         });
 
@@ -460,7 +469,7 @@ export class ParserState {
                         }
 
                         value = value.replace(new RegExp(`defined\\((.*?)\\)`, 'g'), (t, define) => {
-                            return this.defines.some(d => d.name === define) ? '1' : '0';
+                            return this.defines.some(d => !d.undef && d.name === define) ? '1' : '0';
                         });
 
                         scopes.push({line: line, condition: !!this.evaluate(value, line.location)});
@@ -474,7 +483,7 @@ export class ParserState {
                             continue;
                         }
 
-                        scopes.push({line: line, condition: this.defines.some(d => d.name === value)});
+                        scopes.push({line: line, condition: this.defines.some(d => !d.undef && d.name === value)});
                         continue;
                     }
 
@@ -485,7 +494,7 @@ export class ParserState {
                             continue;
                         }
 
-                        scopes.push({line: line, condition: !this.defines.some(d => d.name === value)});
+                        scopes.push({line: line, condition: !this.defines.some(d => !d.undef && d.name === value)});
                         continue;
                     }
 
@@ -519,7 +528,7 @@ export class ParserState {
 
                         let condition = this.replaceDefines(value, line.location);
                         condition = condition.replace(new RegExp(`defined\\((.*?)\\)`, 'g'), (t, define) => {
-                            return this.defines.some(d => d.name === define) ? '1' : '0';
+                            return this.defines.some(d => !d.undef && d.name === define) ? '1' : '0';
                         });
 
                         scopes[scopes.length - 1].condition = this.evaluate(condition, line.location);
@@ -542,19 +551,19 @@ export class ParserState {
                     }
 
                     if (directive[1] === 'define') {
-                        let define = value.match(/^(\w+)(?:\s*\((.*?)\))?\s*(.*)/);
+                        let define = value.match(/^(\w+)(?:\((.*?)\))?\s*(.*)/);
                         if (!define) {
                             this.pushLineDiag(line, 'Invalid define syntax');
                             continue;
                         }
 
-                        let existing = this.defines.find(d => d.name === define[1]);
+                        let existing = this.defines.find(d => !d.undef && d.name === define[1]);
                         if (existing) {
                             this.pushLineDiag(line, 'Duplicate definition');
                             continue;
                         }
 
-                        this.defines.push(new Macro(define[1], define[3], define[2]?.split(',').map(a => a.trim())));
+                        this.defines.push(new Macro(define[1], define[3], line, define[2]?.split(',').map(a => a.trim())));
                         continue;
                     }
 
@@ -565,13 +574,13 @@ export class ParserState {
                             continue;
                         }
 
-                        let index = this.defines.findIndex(d => d.name === undef[0]);
-                        if (index < 0) {
+                        let define = this.defines.find(d => d.name === undef[0]);
+                        if (!define || define.undef) {
                             this.pushLineDiag(line, 'Unknown define');
                             continue;
                         }
 
-                        this.defines.splice(index, 1);
+                        define.undef = line;
                         continue;
                     }
 
@@ -600,16 +609,19 @@ export class ParserState {
                         }
 
                         let includes = [path.resolve(path.dirname(line.uri.fsPath)), ...this.includes];
-                        let dir = includes.find(i => fs.existsSync(i + path.sep + include));
-                        if (!dir) {
+                        let file = includes.map(dir => path.resolve(dir, include)).find(path => fs.existsSync(path));
+                        if (!file) {
                             this.pushLineDiag(line, `No such file: ${include}`, vscode.DiagnosticSeverity.Warning);
                             continue;
                         }
 
-                        let file = dir + path.sep + include;
+                        let uri = vscode.Uri.file(file);
+
+                        this.fileInclusions.push({line: line, file: uri})
+
                         // inject the included file's lines. They will be the next to be processed:
                         try {
-                            rawLines = [...genLines(fs.readFileSync(file, 'utf-8'), vscode.Uri.file(file)), ...rawLines];
+                            rawLines = [...genLines(fs.readFileSync(file, 'utf-8'), uri), ...rawLines];
                         } catch (e) {
                             this.pushLineDiag(line, 'Unable to read file');
                         }
@@ -691,21 +703,18 @@ export class ParserState {
         return { ... this.offset };
     }
 
-    since(state: Offset) {
-        return this.lines.slice(state.line, this.offset.line + 1).map((l, i) => {
-            var start = 0;
-            var end = l.length;
-
-            if (i === this.offset.line - state.line) {
+    since(start: Offset) {
+        return this.lines.slice(start.line, this.offset.line + 1).map((l, i) => {
+            if (i === this.offset.line - start.line) {
                 if (i === 0) {
-                    return l.text.slice(state.col, this.offset.col);
+                    return l.text.slice(start.col, this.offset.col);
                 }
 
                 return l.text.slice(0, this.offset.col);
             }
 
             if (i === 0) {
-                return l.text.slice(state.col);
+                return l.text.slice(start.col);
             }
 
             return l.text;
@@ -715,11 +724,22 @@ export class ParserState {
     constructor(text: string, uri: vscode.Uri, defines: Macro[]=[], includes: string[]=[]) {
         this.text = text;
         this.defines = [new LineMacro(), new FileMacro(vscode.env.appRoot), new CounterMacro(), ...defines];
-        this.includes = includes;
+        this.includes = [
+            path.resolve(vscode.workspace.workspaceFolders[0].uri.fsPath, 'dts'),
+            path.resolve(vscode.workspace.workspaceFolders[0].uri.fsPath, 'dts/arm'),
+            path.resolve(vscode.workspace.workspaceFolders[0].uri.fsPath, 'dts/common'),
+            path.resolve(vscode.workspace.workspaceFolders[0].uri.fsPath, 'include'),
+        ];
         this.uri = uri;
-        this.diags = [];
+        this.diags = {};
         this.offset = {line: 0, col: 0};
+        this.fileInclusions = [];
+
+        var timeStart = process.hrtime();
         this.lines = this.preprocess();
+        var procTime = process.hrtime(timeStart);
+
+        console.log(`Preprocessed ${uri.fsPath} in ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
     }
 }
 
@@ -854,7 +874,7 @@ function parsePropValue(state: ParserState) {
     }
 
     if (elems.length === 0) {
-        this.pushDiag(`Expected property value`);
+        return true;
     }
 
     return elems;
@@ -866,15 +886,15 @@ export class Property {
     value: {value: PropertyValue, raw: string};
     loc: vscode.Location;
 
-    constructor(name: string, loc: vscode.Location, state: ParserState, labels?: string[]) {
+    constructor(name: string, loc: vscode.Location, state?: ParserState, labels?: string[]) {
         this.name = name;
         this.loc = loc;
         this.labels = labels;
 
-        state.skipWhitespace();
-        var start = state.freeze();
-        var value = parsePropValue(state);
-        if (value) {
+        if (state) {
+            state.skipWhitespace();
+            var start = state.freeze();
+            var value = parsePropValue(state);
             this.value = {value: value, raw: state.since(start)};
         } else {
             this.value = {value: true, raw: ''};
@@ -1005,7 +1025,7 @@ export class Node {
             prop = e.properties.find(e => e.name === name);
         });
 
-        return prop ?? undefined;
+        return prop;
     }
 
     uniqueProperties(): Property[] {
@@ -1015,10 +1035,10 @@ export class Node {
 };
 
 export class Parser {
-
+    state?: ParserState;
     nodes: {[fullPath: string]: Node};
     root?: Node;
-    docs: { [path: string]: {version: number, topLevelEntries: NodeEntry[], diags: vscode.Diagnostic[] }};
+    docs: { [path: string]: {version: number, topLevelEntries: NodeEntry[], diags: {[uri: string]: DiagCollection} }};
 
     constructor() {
         this.nodes = {};
@@ -1035,56 +1055,56 @@ export class Parser {
         });
     }
 
-    parse(text: string, doc: vscode.TextDocument, documentVersion?: number, diags: vscode.Diagnostic[]=[]): NodeEntry[] {
+    parse(text: string, doc: vscode.TextDocument, documentVersion?: number): NodeEntry[] {
         if (documentVersion !== undefined) {
             if (this.docs[doc.uri.fsPath] && this.docs[doc.uri.fsPath].version === documentVersion) {
-                diags.push(...this.docs[doc.uri.fsPath].diags);
                 return this.docs[doc.uri.fsPath].topLevelEntries; /* No need to reparse */
             }
 
-            this.docs[doc.uri.fsPath] = {version: documentVersion, topLevelEntries: [], diags: []};
+            this.docs[doc.uri.fsPath] = {version: documentVersion, topLevelEntries: [], diags: {}};
         }
-        var timeStart = process.hrtime();
+
         this.cleanFile(doc);
-        var state = new ParserState(text, doc.uri);
+        this.state = new ParserState(text, doc.uri);
+        var timeStart = process.hrtime();
         var nodeStack: NodeEntry[] = [];
         var requireSemicolon = false;
         var labels = new Array<string>();
-        while (state.skipWhitespace()) {
-            var blockComment = state.match(/^\/\*[\s\S]*?\*\//);
+        while (this.state.skipWhitespace()) {
+            var blockComment = this.state.match(/^\/\*[\s\S]*?\*\//);
             if (blockComment) {
                 continue;
             }
 
-            var comment = state.match(/^\/\/.*/);
+            var comment = this.state.match(/^\/\/.*/);
             if (comment) {
                 continue;
             }
 
             if (requireSemicolon) {
-                var token = state.match(/^[^;]+/);
+                var token = this.state.match(/^[^;]+/);
                 if (token) {
-                    state.pushDiag('Expected semicolon');
+                    this.state.pushDiag('Expected semicolon');
                     continue;
                 }
-                var token = state.match(/^;/);
+                var token = this.state.match(/^;/);
                 if (token) {
                     requireSemicolon = false;
                 }
                 continue;
             }
 
-            var label = state.match(/^([\w\-]+):\s*/);
+            var label = this.state.match(/^([\w\-]+):\s*/);
             if (label) {
                 labels.push(label[1]);
                 continue;
             }
 
-            let name = state.match(/^([#?\w,\.+\-]+)/);
+            let name = this.state.match(/^([#?\w,\.+\-]+)/);
             if (name) {
-                let nameLoc = state.location();
+                let nameLoc = this.state.location();
 
-                let nodeMatch = state.match(/^(?:@([\da-fA-F]+))?\s*{/);
+                let nodeMatch = this.state.match(/^(?:@([\da-fA-F]+))?\s*{/);
                 if (nodeMatch) {
                     var node = new Node(name[1],
                         nodeMatch[1],
@@ -1108,7 +1128,7 @@ export class Parser {
                         delete this.nodes[existingNode.name];
                     }
 
-                    let loc = state.location();
+                    let loc = this.state.location();
                     let entry = new NodeEntry(nameLoc, node, nameLoc);
 
                     entry.labels.push(...labels);
@@ -1123,47 +1143,55 @@ export class Parser {
                     }
                     nodeStack.push(entry);
 
-                    if (nodeMatch[1]?.startsWith('0')) {
-                        state.pushDiag(`Address should not start with leading 0's`, vscode.DiagnosticSeverity.Warning);
+                    if (nodeMatch[1]?.startsWith('0') && Number(nodeMatch[1]) !== 0) {
+                        this.state.pushDiag(`Address should not start with leading 0's`, vscode.DiagnosticSeverity.Warning);
                     }
 
                     labels = [];
                     continue;
                 }
 
-                state.skipWhitespace();
-                let isProp = state.match(/^\=/);
-                if (isProp) {
+                requireSemicolon = true;
+
+                this.state.skipWhitespace();
+                let hasPropValue = this.state.match(/^\=/);
+                if (hasPropValue) {
                     if (nodeStack.length > 0) {
-                        var p = new Property(name[0], nameLoc, state, labels);
+                        var p = new Property(name[0], nameLoc, this.state, labels);
                         nodeStack[nodeStack.length - 1].properties.push(p);
                     } else {
-                        state.pushDiag('Property outside of node context', vscode.DiagnosticSeverity.Error, nameLoc);
+                        this.state.pushDiag('Property outside of node context', vscode.DiagnosticSeverity.Error, nameLoc);
                     }
 
-                    requireSemicolon = true;
                     labels = [];
                     continue;
                 }
 
-                state.pushDiag('Expected node or property value');
+                if (nodeStack.length > 0) {
+                    var p = new Property(name[0], nameLoc, undefined, labels);
+                    nodeStack[nodeStack.length - 1].properties.push(p);
+                    labels = [];
+                    continue;
+                }
+
+                this.state.pushDiag('Property outside of node context', vscode.DiagnosticSeverity.Error, nameLoc);
                 continue;
             }
 
-            let refMatch = state.match(/^(&[\w\-]+)/);
+            let refMatch = this.state.match(/^(&[\w\-]+)/);
             if (refMatch) {
-                let refLoc = state.location();
-                state.skipWhitespace();
+                let refLoc = this.state.location();
+                this.state.skipWhitespace();
 
-                let isNode = state.match(/^{/);
+                let isNode = this.state.match(/^{/);
                 if (!isNode) {
-                    state.pushDiag('References can only be made to nodes');
+                    this.state.pushDiag('References can only be made to nodes');
                     continue;
                 }
 
                 let node = this.getNode(refMatch[1]);
                 if (!node) {
-                    state.pushDiag('Unknown label', vscode.DiagnosticSeverity.Error, refLoc);
+                    this.state.pushDiag('Unknown label', vscode.DiagnosticSeverity.Error, refLoc);
                     node = new Node(refMatch[1]);
                     this.nodes[node.name] = node;
                 }
@@ -1182,24 +1210,24 @@ export class Parser {
             }
 
             if (labels.length) {
-                state.pushDiag('Expected node or property after label', vscode.DiagnosticSeverity.Warning);
+                this.state.pushDiag('Expected node or property after label', vscode.DiagnosticSeverity.Warning);
                 labels = [];
             }
 
-            var versionDirective = state.match(/^\/dts-v.+?\/\s*/);
+            var versionDirective = this.state.match(/^\/dts-v.+?\/\s*/);
             if (versionDirective) {
                 requireSemicolon = true;
                 continue;
             }
 
-            var deleteNode = state.match(/^\/delete-node\//);
+            var deleteNode = this.state.match(/^\/delete-node\//);
             if (deleteNode) {
-                state.skipWhitespace();
+                this.state.skipWhitespace();
                 requireSemicolon = true;
 
-                let node = state.match(/^(&?)([\w,\._+\-]+)/);
+                let node = this.state.match(/^(&?)([\w,\._+\-]+)/);
                 if (!node) {
-                    state.pushDiag(`Expected node`);
+                    this.state.pushDiag(`Expected node`);
                     continue;
                 }
 
@@ -1207,24 +1235,24 @@ export class Parser {
                 if (n) {
                     n.deleted = true;
                 } else {
-                    state.pushDiag(`Unknown node`, vscode.DiagnosticSeverity.Warning);
+                    this.state.pushDiag(`Unknown node`, vscode.DiagnosticSeverity.Warning);
                 }
                 continue;
             }
 
-            var deleteProp = state.match(/^\/delete-property\//);
+            var deleteProp = this.state.match(/^\/delete-property\//);
             if (deleteProp) {
-                state.skipWhitespace();
+                this.state.skipWhitespace();
                 requireSemicolon = true;
 
-                var prop = state.match(/^[#?\w,\._+\-]+/);
+                var prop = this.state.match(/^[#?\w,\._+\-]+/);
                 if (!prop) {
-                    state.pushDiag('Expected property');
+                    this.state.pushDiag('Expected property');
                     continue;
                 }
 
                 if (!nodeStack.length) {
-                    state.pushDiag(`Can only delete properties inside a node`);
+                    this.state.pushDiag(`Can only delete properties inside a node`);
                     continue;
                 }
 
@@ -1234,55 +1262,55 @@ export class Parser {
                 }
                 var p = props.find(p => p.name === deleteProp[0]);
                 if (!p) {
-                    state.pushDiag(`Unknown property`, vscode.DiagnosticSeverity.Warning);
+                    this.state.pushDiag(`Unknown property`, vscode.DiagnosticSeverity.Warning);
                     continue;
                 }
 
                 continue;
             }
 
-            var rootMatch = state.match(/^\/\s*{/);
+            var rootMatch = this.state.match(/^\/\s*{/);
             if (rootMatch) {
                 if (!this.root) {
                     this.root = new Node('/');
                     this.nodes['/'] = this.root;
                 }
-                var entry = new NodeEntry(state.location(), this.root, new vscode.Location(state.location().uri, state.location().range.start));
+                var entry = new NodeEntry(this.state.location(), this.root, new vscode.Location(this.state.location().uri, this.state.location().range.start));
                 this.root.entries.push(entry);
                 this.docs[doc.uri.fsPath].topLevelEntries.push(entry);
                 nodeStack.push(entry);
                 continue;
             }
 
-            var closingBrace = state.match(/^}/);
+            var closingBrace = this.state.match(/^}/);
             if (closingBrace) {
                 if (nodeStack.length > 0) {
                     var entry = nodeStack.pop();
-                    entry.loc = new vscode.Location(entry.loc.uri, new vscode.Range(entry.loc.range.start, state.location().range.end));
+                    entry.loc = new vscode.Location(entry.loc.uri, new vscode.Range(entry.loc.range.start, this.state.location().range.end));
                 } else {
-                    state.pushDiag('Unexpected closing bracket');
+                    this.state.pushDiag('Unexpected closing bracket');
                 }
 
                 requireSemicolon = true;
                 continue;
             }
 
-            state.skipToken();
-            state.pushDiag('Unexpected token');
+            this.state.skipToken();
+            this.state.pushDiag('Unexpected token');
         }
 
         if (nodeStack.length > 0) {
             let entry = nodeStack[nodeStack.length - 1];
-            entry.loc = new vscode.Location(entry.loc.uri, new vscode.Range(entry.loc.range.start, state.location().range.end));
+            entry.loc = new vscode.Location(entry.loc.uri, new vscode.Range(entry.loc.range.start, this.state.location().range.end));
             console.error(`Unterminated node: ${nodeStack[nodeStack.length - 1].node.name}`);
-            state.pushDiag('Unterminated node', vscode.DiagnosticSeverity.Error, entry.nameLoc);
+            this.state.pushDiag('Unterminated node', vscode.DiagnosticSeverity.Error, entry.nameLoc);
         }
 
         var procTime = process.hrtime(timeStart);
 
         console.log(`Parsed ${doc.uri.fsPath} in ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
 
-        this.docs[doc.uri.fsPath].diags = state.diags.find(d => d.uri.fsPath === doc.uri.fsPath)?.diags ?? [];
+        this.docs[doc.uri.fsPath].diags = this.state.diags;
         return this.docs[doc.uri.fsPath].topLevelEntries;
     }
 

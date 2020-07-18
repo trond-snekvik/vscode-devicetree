@@ -387,18 +387,16 @@ export class TypeLoader {
         });
     }
 
-    get(name: string, nodeName?: string, load=true): NodeType | undefined {
-        // Try the name of the type, the node name and the node name singular:
-        var typeName = [name, nodeName, (nodeName || 'undefined').replace(/s$/,'')].find(n => n && n in this.types);
-        if (!typeName) {
+    get(name: string): NodeType | undefined {
+        if (!(name in this.types)) {
             return undefined;
         }
 
-        if (load && !this.types[typeName]?.loaded) {
-            this.types[typeName] = this.loadYAML(typeName);
+        if (!this.types[name]?.loaded) {
+            this.types[name] = this.loadYAML(name);
         }
 
-        return this.types[typeName];
+        return this.types[name];
     }
 
     YAMLtoNode(tree: any, baseType?: NodeType): NodeType {
@@ -460,42 +458,46 @@ export class TypeLoader {
         var props = node.properties();
 
         var getBaseType = () => {
-            var pathBasedType = this.get(node.path);
-            if (pathBasedType) {
-                return pathBasedType;
-            }
+            let candidates = [node.path];
 
             if (node.path.match(/\/cpus\/cpu[^\/]*$/)) {
-                return this.get('/cpus/cpu');
+                candidates.push('/cpus/cpu');
             }
 
-            const compatible = props.find(p => p.name === 'compatible');
-            if (compatible) {
-                if (typeof compatible.value.value === 'string') {
-                    return this.get(compatible.value.value, node.name);
+            let compatibleProp = props.find(p => p.name === 'compatible');
+            if (compatibleProp) {
+                let compatible: string[];
+                if (typeof compatibleProp.value.actual === 'string') {
+                    compatible = [compatibleProp.value.actual as string];
+                } else if (Array.isArray(compatibleProp.value.actual)) {
+                    compatible = compatibleProp.value.actual as string[];
+                } else {
+                    compatible = [];
+                    parser?.pushDiag(`Property compatible must be a string or an array of strings`, DiagnosticSeverity.Warning, compatibleProp.loc);
                 }
 
-                if (Array.isArray(compatible.value.value)) {
-                    if (typeof compatible.value.value[0] === 'string') {
-                        var n: NodeType;
-                        (compatible.value.value as string[]).find(v => {
-                            n = this.get(v, node.name);
-                            return n;
-                        });
-                        return n;
+                compatible.forEach(c => {
+                    candidates.push(c);
+                    // Some types are named "binding-bus", like bosch,bme280-i2c:
+                    if (parentType && parentType['child-bus']) {
+                        candidates.push(`${c}-${parentType['child-bus']}`);
                     }
-                    parser?.pushDiag(`Property compatible must be an array of strings`, DiagnosticSeverity.Warning, compatible.loc);
-                } else {
-                    parser?.pushDiag(`Property compatible must be a string or an array of strings`, DiagnosticSeverity.Warning, compatible.loc);
-                }
-                parser?.pushDiag(`Unknown type ${compatible.value.raw}`, DiagnosticSeverity.Warning, compatible.loc);
-                return;
+                })
+            }
+
+            candidates.push(node.name);
+            candidates.push(node.name.replace(/s$/, ''));
+
+            let type: NodeType;
+            if (candidates.some(c => (type = this.get(c)))) {
+                return type;
             }
 
             if (parentType && parentType['child-binding']) {
                 return parentType['child-binding'];
             }
-            node.entries.forEach(e => parser?.pushDiag(`Missing "compatible" property`, DiagnosticSeverity.Warning, e.nameLoc));
+
+            node.entries.forEach(e => parser?.pushDiag(`Unknown type. Missing "compatible" property`, DiagnosticSeverity.Warning, e.nameLoc));
         };
 
         var type = getBaseType();

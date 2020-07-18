@@ -164,7 +164,7 @@ function getCells(propName: string, parent?: parser.Node): string[] | undefined 
     var cellProp = getPHandleCells(propName, parent);
 
     if (cellProp) {
-        return ['label'].concat(Array(<number> cellProp.value.value).fill('cell'));
+        return ['label'].concat(Array(<number> cellProp.value.actual).fill('cell'));
     }
 
     if (propName === 'reg') {
@@ -175,12 +175,12 @@ function getCells(propName: string, parent?: parser.Node): string[] | undefined 
 
             var addrCellsProp = parentProps.find(p => p.name === '#address-cells');
             if (addrCellsProp) {
-                addrCells = addrCellsProp.value.value as number;
+                addrCells = addrCellsProp.value.actual as number;
             }
 
             var sizeCellsProp = parentProps.find(p => p.name === '#size-cells');
             if (sizeCellsProp) {
-                sizeCells = sizeCellsProp.value.value as number;
+                sizeCells = sizeCellsProp.value.actual as number;
             }
         }
         return Array(addrCells).fill('addr').concat(Array(sizeCells).fill('size'));
@@ -277,8 +277,8 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                             if (!ref) {
                                 this.parser.state.pushDiag(`Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error, p.loc);
                             }
-                        } else if (typeof p.value.value === 'string') {
-                            var ref = this.parser.getNode(p.value.value);
+                        } else if (typeof p.value.actual === 'string') {
+                            var ref = this.parser.getNode(p.value.actual);
                             if (!ref) {
                                 this.parser.state.pushDiag(`Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error, p.loc);
                             }
@@ -301,12 +301,12 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             entry.children.forEach(c => annotateNode(c, type));
 
             // Check overlapping ranges
-            if (props.find(p => p.name === '#address-cells' && p.value.value === 1) && props.find(p => p.name === '#size-cells' && p.value.value === 1)) {
+            if (props.find(p => p.name === '#address-cells' && p.value.actual === 1) && props.find(p => p.name === '#size-cells' && p.value.actual === 1)) {
                 let ranges = new Array<{n: parser.NodeEntry, start: number, size: number}>();
                 entry.children.forEach(c => {
                     let reg = c.properties.find(p => p.name === 'reg');
-                    if (c.node.enabled() && reg && isArray(reg.value.value)) {
-                        let range = {n: c, start: reg.value.value[0], size: reg.value.value[1]};
+                    if (c.node.enabled() && reg && isArray(reg.value.actual)) {
+                        let range = {n: c, start: reg.value.actual[0], size: reg.value.actual[1]};
                         let overlap = ranges.find(r => r.start + r.size > range.start && range.start + range.size > r.start);
                         if (overlap) {
                             let diag = this.parser.state.pushDiag(`Range overlaps with ${overlap.n.node.fullName}`, vscode.DiagnosticSeverity.Warning, c.nameLoc);
@@ -340,26 +340,26 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                         var correctType = (type: types.PropertyTypeString) => {
                             switch (type) {
                                 case 'array':
-                                    return (typeof prop.value.value === 'number') || (Array.isArray(prop.value.value) && (prop.value.value as any[]).every(v => typeof v === 'number'));
+                                    return (typeof prop.value.actual === 'number') || (Array.isArray(prop.value.actual) && (prop.value.actual as any[]).every(v => typeof v === 'number'));
                                 case 'boolean':
-                                    return (typeof prop.value.value === 'boolean');
+                                    return (typeof prop.value.actual === 'boolean');
                                 case 'compound':
                                     return true; // any
                                 case 'int':
-                                    return (typeof prop.value.value === 'number');
+                                    return (typeof prop.value.actual === 'number');
                                 case 'phandle':
                                     /* PHandles can be numbers if there's a node with that number as the value of their phandle property. */
-                                    return ((typeof prop.value.value === 'object') && ('node' in prop.value.value)) ||
-                                           ((typeof prop.value.value === 'number') && (this.parser.getPHandleNode(prop.value.value)));
+                                    return ((typeof prop.value.actual === 'object') && ('node' in prop.value.actual)) ||
+                                           ((typeof prop.value.actual === 'number') && (this.parser.getPHandleNode(prop.value.actual)));
                                 case 'phandle-array':
-                                    return (Array.isArray(prop.value.value) && (prop.value.value as any[]).every(v => typeof v === 'number' || (typeof v === 'string' && v.startsWith('&')))) ||
-                                            (typeof prop.value.value === 'number' || (typeof prop.value.value === 'string' && prop.value.value.startsWith('&')));
+                                    return (Array.isArray(prop.value.actual) && (prop.value.actual as any[]).every(v => typeof v === 'number' || (typeof v === 'string' && v.startsWith('&')))) ||
+                                            (typeof prop.value.actual === 'number' || (typeof prop.value.actual === 'string' && prop.value.actual.startsWith('&')));
                                 case 'string':
-                                    return (typeof prop.value.value === 'string');
+                                    return (typeof prop.value.actual === 'string');
                                 case 'string-array':
-                                    return (typeof prop.value.value === 'string') || (Array.isArray(prop.value.value) && (prop.value.value as any[]).every(v => typeof v === 'string'));
+                                    return (typeof prop.value.actual === 'string') || (Array.isArray(prop.value.actual) && (prop.value.actual as any[]).every(v => typeof v === 'string'));
                                 case 'uint8-array':
-                                    return (Array.isArray(prop.value.value) && (prop.value.value as any[]).every(v => typeof v === 'number') && prop.value.raw.match(/\[[\da-fA-F\s]+\]/));
+                                    return (Array.isArray(prop.value.actual) && (prop.value.actual as any[]).every(v => typeof v === 'number') && prop.value.raw.match(/\[[\da-fA-F\s]+\]/));
                                 default:
                                     return true;
                             }
@@ -373,17 +373,15 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                             this.parser.state.pushDiag(`Property value type must be ${propType.type}`, vscode.DiagnosticSeverity.Warning, prop.loc);
                         }
 
-                        if (propType.enum && propType.enum.indexOf(prop.value.value.toString()) < 0) {
-                            this.parser.state.pushDiag('Property value must be one of ' + propType.enum.join(', '), vscode.DiagnosticSeverity.Warning, prop.loc);
+                        if (propType.enum && propType.enum.indexOf(prop.value.actual.toString()) < 0) {
                         }
 
-                        if (propType.const !== undefined && propType.const !== prop.value.value) {
-                            this.parser.state.pushDiag(`Property value must be ${propType.const}`, vscode.DiagnosticSeverity.Warning, prop.loc);
+                        if (propType.const !== undefined && propType.const !== prop.value.actual) {
                         }
 
                         if (propType.type === 'phandle-array') {
                             var propText = doc.getText(prop.loc.range) as string;
-                            (<(string | number)[]>prop.value.value).forEach(e => {
+                            (<(string | number)[]>prop.value.actual).forEach(e => {
                                 if (typeof e === 'string' && !this.parser.getPHandleNode(e.slice(1))) {
                                     this.parser.state.pushDiag(`Unknown label`, vscode.DiagnosticSeverity.Warning, prop.loc);
                                 }
@@ -394,11 +392,9 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                             var cells = getCells(prop.name, node.parent);
 
                             if (cells) {
-                                if ((typeof prop.value.value === 'number' && cells.length !== 1) ||
-                                    (Array.isArray(prop.value.value) && prop.value.value.length !== cells.length)) {
-                                    this.parser.state.pushDiag(`reg property must be on format <${cells.join(' ')}>`, vscode.DiagnosticSeverity.Error, prop.loc);
-                                } else if (cells.length > 0 && cells[0] === 'addr' && node.address !== NaN && node.address !== prop.value.value && node.address !== prop.value.value[0]) {
-                                    this.parser.state.pushDiag(`Node address does not match address cell (expected 0x${node.address.toString(16)})`, vscode.DiagnosticSeverity.Warning, prop.loc);
+                                if ((typeof prop.value.actual === 'number' && cells.length !== 1) ||
+                                    (Array.isArray(prop.value.actual) && prop.value.actual.length !== cells.length)) {
+                                } else if (cells.length > 0 && cells[0] === 'addr' && node.address !== NaN && node.address !== prop.value.actual && node.address !== prop.value.actual[0]) {
                                 }
                             } else {
                                 this.parser.state.pushDiag(`Unable to fetch addr and size count`, vscode.DiagnosticSeverity.Error, prop.loc);
@@ -406,7 +402,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                             }
                         } else if (prop.name === 'compatible') {
                             var propText = doc.getText(prop.loc.range);
-                            var types: string[] = typeof prop.value.value === 'string' ? [prop.value.value] : prop.value.value as string[];
+                            var types: string[] = typeof prop.value.actual === 'string' ? [prop.value.actual] : prop.value.actual as string[];
                             var type = types.map(t => {
                                 var type = this.types.get(t, node.name);
                                 if (!type) {
@@ -422,20 +418,20 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                             }
 
                         } else if (prop.name === 'status') {
-                            if (prop.value.value === 'disabled') {
+                            if (prop.value.actual === 'disabled') {
                                 node.entries.filter(e => e.loc.uri.fsPath === doc.uri.fsPath).forEach(e => {
                                     let diag = this.parser.state.pushDiag(`Disabled`, vscode.DiagnosticSeverity.Hint, e.nameLoc);
                                     diag.tags = [vscode.DiagnosticTag.Unnecessary];
                                     diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(prop.loc.uri, prop.loc.range), `Disabled here`)];
                                 });
                             }
-                        } else if (propType.type === 'phandle-array' && Array.isArray(prop.value.value)) {
+                        } else if (propType.type === 'phandle-array' && Array.isArray(prop.value.actual)) {
                             let c = getPHandleCells(prop.name, node.parent);
                             if (c) {
-                                let value = c.value.value as (string | number)[];
-                                if (typeof c.value.value === 'number') {
-                                    if ((value.length % (c.value.value + 1)) !== 0) {
-                                        this.parser.state.pushDiag(`PHandle array must have ${c.value.value} number cells`, vscode.DiagnosticSeverity.Error, prop.loc);
+                                let value = c.value.actual as (string | number)[];
+                                if (typeof c.value.actual === 'number') {
+                                    if ((value.length % (c.value.actual + 1)) !== 0) {
+                                        pushDiag(`PHandle array must have ${c.value.actual} number cells`, vscode.DiagnosticSeverity.Error, prop.loc);
                                     }
                                 } else {
                                     this.parser.state.pushDiag(`Parent's *-cells property must be an int`, vscode.DiagnosticSeverity.Error, prop.loc);
@@ -465,7 +461,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             if (p.name.startsWith('#')) {
                 return vscode.SymbolKind.Number;
             }
-            switch (typeof p.value.value) {
+            switch (typeof p.value.actual) {
                 case 'boolean': return vscode.SymbolKind.Boolean;
                 case 'number': return vscode.SymbolKind.Operator;
                 case 'string':
@@ -477,8 +473,8 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                     }
                     return vscode.SymbolKind.String;
                 default:
-                    if (Array.isArray(p.value.value)) {
-                        if (typeof p.value.value[0] === 'string') {
+                    if (Array.isArray(p.value.actual)) {
+                        if (typeof p.value.actual[0] === 'string') {
                             return vscode.SymbolKind.String;
                         }
                         if (p.value.raw.startsWith('[')) {
@@ -993,7 +989,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                 }
             }
         } else {
-            params = Array((<[]>prop[1].value.value).length).fill('').map((_, i) => `param-${i+1}`);
+            params = Array((<[]>prop[1].value.actual).length).fill('').map((_, i) => `param-${i+1}`);
         }
 
         if (!params) {

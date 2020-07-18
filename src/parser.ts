@@ -883,7 +883,7 @@ function parsePropValue(state: ParserState) {
 export class Property {
     name: string;
     labels?: string[];
-    value: {value: PropertyValue, raw: string};
+    value: {actual: PropertyValue, raw: string};
     loc: vscode.Location;
 
     constructor(name: string, loc: vscode.Location, state?: ParserState, labels?: string[]) {
@@ -895,9 +895,9 @@ export class Property {
             state.skipWhitespace();
             var start = state.freeze();
             var value = parsePropValue(state);
-            this.value = {value: value, raw: state.since(start)};
+            this.value = {actual: value, raw: state.since(start)};
         } else {
-            this.value = {value: true, raw: ''};
+            this.value = {actual: true, raw: ''};
         }
     }
 
@@ -906,7 +906,7 @@ export class Property {
             return `${this.name} = ?`;
         }
 
-        if (this.value.value === true) {
+        if (this.value.actual === true) {
             return `${this.name}`
         }
 
@@ -993,7 +993,7 @@ export class Node {
 
     enabled(): boolean {
         var status = this.property('status');
-        return !status || (status.value.value === 'okay');
+        return !status || (status.value.actual === 'okay');
     }
 
     hasLabel(label: string) {
@@ -1351,7 +1351,7 @@ export class Parser {
 
     getPHandleNode(handle: number | string): Node {
         if (typeof handle === 'number') {
-            return this.nodeArray().find(n => n.properties().find(p => p.name === 'phandle' && p.value.value === handle));
+            return this.nodeArray().find(n => n.properties().find(p => p.name === 'phandle' && p.value.actual === handle));
         } else if (typeof handle === 'string') {
             return this.nodeArray().find(n => n.labels().find(p => p === handle));
         }

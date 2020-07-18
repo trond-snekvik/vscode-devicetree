@@ -6,7 +6,7 @@ import * as glob from 'glob';
 import { readFileSync } from 'fs';
 import * as path from 'path';
 import { isArray } from 'util';
-
+import { execSync } from 'child_process'
 
 function getConfig(variable: string) {
     var config = vscode.workspace.getConfiguration('devicetree');
@@ -45,10 +45,18 @@ function getBindingDirs(): string[] {
     return paths;
 }
 
-function getAutoIncludes(dir: string): string[] {
-    // var patterns = getConfig('autoincludes') as string[];
-    var patterns = ['${workspaceFolder}/boards/arm/nrf52_pca10040/nrf52_pca10040.dts'];
-    patterns = patterns.map(p => p.replace(/\${(.+?)}/g, (fullMatch: string, variable: string) => {
+function getBoardFile(dir: string): string {
+    var boardFile: string;
+    boardFile = getConfig('devicetree.boardFile') as string;
+    if (!boardFile) {
+        boardFile = getConfig('kconfig.board.dir') as string;
+    }
+
+    if (!boardFile) {
+        boardFile = '${ZEPHYR_BASE}/boards/arm/nrf52dk_nrf52832/nrf52dk_nrf52832.dts';
+    }
+
+    return path.resolve(boardFile.replace(/\${(.+?)}/g, (fullMatch: string, variable: string) => {
             if (variable.startsWith('workspaceFolder')) {
                 if (vscode.workspace.workspaceFolders.length === 0) {
                     return '';
@@ -65,10 +73,23 @@ function getAutoIncludes(dir: string): string[] {
                 return vscode.window.activeTextEditor.document.uri.fsPath.replace(/[^\/\\]+$/, '');
             }
 
+            if (variable in process.env) {
+                return process.env[variable];
+            }
+
+            if (variable === 'ZEPHYR_BASE') {
+                try {
+                    const options = { cwd: dir };
+                    let topdir = execSync('west topdir', options).toString('utf-8');
+                    let zephyrBase = execSync('west config zephyr.base', options).toString('utf-8');
+                    return topdir.trim() + path.sep + zephyrBase.trim();
+                } catch (e) {
+                    /* Ignore */
+                }
+            }
+
             return fullMatch;
     }));
-
-    return glob.sync('{' + patterns.join(',') + ',}', {cwd: dir, absolute: true, nosort: true}).map(p => path.resolve(dir, p));
 }
 
 function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString, parent?: parser.Node, parentType?: types.NodeType, node?: parser.Node) {
@@ -241,12 +262,12 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         this.parser = new parser.Parser();
 
         var dir = document.uri.fsPath.replace(/[\\/][^\\/]+$/, '').replace(/\\/g, '/');
+        var boardFile = getBoardFile(dir);
 
-        var docs = getAutoIncludes(dir);
-
-        Promise.all(docs.map(d => {
-            return vscode.workspace.openTextDocument(d).then(doc => this.parseDoc(doc));
-        })).then(_ => {
+        vscode.workspace.openTextDocument(boardFile).then(boardDoc => {
+            this.parseDoc(boardDoc);
+            this.parseDoc(document);
+        }, () => {
             this.parseDoc(document);
         });
     }
@@ -257,6 +278,17 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         }
 
         var topLevelEntries = this.parser.parse(doc.getText(), doc, doc.version);
+        var diags: {[fsPath: string]: parser.DiagCollection } = {};
+        (Object.keys(this.parser.state!.diags).forEach(k => diags[k] = { uri: this.parser.state!.diags[k].uri, diags: [...this.parser.state!.diags[k].diags] }));
+        const pushDiag = (msg: string, severity: vscode.DiagnosticSeverity, loc: vscode.Location) => {
+            if (!(loc.uri.fsPath in diags)) {
+                diags[loc.uri.fsPath] = {uri: loc.uri, diags: []};
+            }
+
+            let diag = new vscode.Diagnostic(loc.range, msg, severity);
+            diags[loc.uri.fsPath].diags.push(diag);
+            return diag;
+        };
 
         var annotateNode = (entry: parser.NodeEntry, parentType?: types.NodeType) => {
             var node = entry.node;
@@ -268,33 +300,33 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             if (node.fullName === 'aliases' || node.fullName === 'chosen') {
                 if (node.path === '/aliases/' || node.path === '/chosen/') {
                     if (node.children().length > 0) {
-                        this.parser.state.pushDiag(`Node ${node.name} shouldn't have child nodes`, vscode.DiagnosticSeverity.Error, entry.nameLoc);
+                        pushDiag(`Node ${node.name} shouldn't have child nodes`, vscode.DiagnosticSeverity.Error, entry.nameLoc);
                     }
 
                     entry.properties.forEach(p => {
                         if (p.value.raw.startsWith('&')) {
                             var ref = this.parser.getNode(p.value.raw);
                             if (!ref) {
-                                this.parser.state.pushDiag(`Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error, p.loc);
+                                pushDiag(`Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error, p.loc);
                             }
                         } else if (typeof p.value.actual === 'string') {
                             var ref = this.parser.getNode(p.value.actual);
                             if (!ref) {
-                                this.parser.state.pushDiag(`Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error, p.loc);
+                                pushDiag(`Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error, p.loc);
                             }
                         } else {
-                            this.parser.state.pushDiag(`Properties in ${node.name} must be references to nodes`, vscode.DiagnosticSeverity.Error, p.loc);
+                            pushDiag(`Properties in ${node.name} must be references to nodes`, vscode.DiagnosticSeverity.Error, p.loc);
                         }
                     });
                 } else {
-                    this.parser.state.pushDiag(`Node ${node.name} must be under the root node`, vscode.DiagnosticSeverity.Error, entry.nameLoc);
+                    pushDiag(`Node ${node.name} must be under the root node`, vscode.DiagnosticSeverity.Error, entry.nameLoc);
                 }
                 return;
             }
 
             if (node.fullName === 'cpus') {
                 if (node.path !== '/cpus/') {
-                    this.parser.state.pushDiag(`Node cpus must be directly under the root node`, vscode.DiagnosticSeverity.Error, entry.nameLoc);
+                    pushDiag(`Node cpus must be directly under the root node`, vscode.DiagnosticSeverity.Error, entry.nameLoc);
                 }
             }
 
@@ -309,7 +341,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                         let range = {n: c, start: reg.value.actual[0], size: reg.value.actual[1]};
                         let overlap = ranges.find(r => r.start + r.size > range.start && range.start + range.size > r.start);
                         if (overlap) {
-                            let diag = this.parser.state.pushDiag(`Range overlaps with ${overlap.n.node.fullName}`, vscode.DiagnosticSeverity.Warning, c.nameLoc);
+                            let diag = pushDiag(`Range overlaps with ${overlap.n.node.fullName}`, vscode.DiagnosticSeverity.Warning, c.nameLoc);
                             if (overlap.start < range.start) {
                                 diag.message += ` (ends at 0x${(overlap.start + overlap.size).toString(16)})`;
                             } else {
@@ -324,12 +356,12 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             }
 
             if (!type) {
-                this.parser.state.pushDiag(`Unknown node type`, vscode.DiagnosticSeverity.Warning, entry.nameLoc);
+                pushDiag(`Unknown node type`, vscode.DiagnosticSeverity.Warning, entry.nameLoc);
                 return;
             }
 
             if (type['on-bus'] && type['on-bus'] !== parentType?.['bus']) {
-                this.parser.state.pushDiag(`Node should only occur on the ${type['on-bus']} bus.`, vscode.DiagnosticSeverity.Error, entry.nameLoc);
+                pushDiag(`Node should only occur on the ${type['on-bus']} bus.`, vscode.DiagnosticSeverity.Error, entry.nameLoc);
             }
 
             type.properties.forEach(propType => {
@@ -367,23 +399,25 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
                         if (Array.isArray(propType.type)) {
                             if (!propType.type.find(correctType)) {
-                                this.parser.state.pushDiag('Property value type must be one of ' + propType.type.join(', '), vscode.DiagnosticSeverity.Warning, prop.loc);
+                                pushDiag('Property value type must be one of ' + propType.type.join(', '), vscode.DiagnosticSeverity.Warning, prop.loc);
                             }
                         } else if (!correctType(propType.type)) {
-                            this.parser.state.pushDiag(`Property value type must be ${propType.type}`, vscode.DiagnosticSeverity.Warning, prop.loc);
+                            pushDiag(`Property value type must be ${propType.type}`, vscode.DiagnosticSeverity.Warning, prop.loc);
                         }
 
                         if (propType.enum && propType.enum.indexOf(prop.value.actual.toString()) < 0) {
+                            pushDiag('Property value must be one of ' + propType.enum.join(', '), vscode.DiagnosticSeverity.Warning, prop.loc);
                         }
 
                         if (propType.const !== undefined && propType.const !== prop.value.actual) {
+                            pushDiag(`Property value must be ${propType.const}`, vscode.DiagnosticSeverity.Warning, prop.loc);
                         }
 
                         if (propType.type === 'phandle-array') {
                             var propText = doc.getText(prop.loc.range) as string;
                             (<(string | number)[]>prop.value.actual).forEach(e => {
                                 if (typeof e === 'string' && !this.parser.getPHandleNode(e.slice(1))) {
-                                    this.parser.state.pushDiag(`Unknown label`, vscode.DiagnosticSeverity.Warning, prop.loc);
+                                    pushDiag(`Unknown label`, vscode.DiagnosticSeverity.Warning, prop.loc);
                                 }
                             })
                         }
@@ -394,33 +428,35 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                             if (cells) {
                                 if ((typeof prop.value.actual === 'number' && cells.length !== 1) ||
                                     (Array.isArray(prop.value.actual) && prop.value.actual.length !== cells.length)) {
+                                    pushDiag(`reg property must be on format <${cells.join(' ')}>`, vscode.DiagnosticSeverity.Error, prop.loc);
                                 } else if (cells.length > 0 && cells[0] === 'addr' && node.address !== NaN && node.address !== prop.value.actual && node.address !== prop.value.actual[0]) {
+                                    pushDiag(`Node address does not match address cell (expected 0x${node.address.toString(16)})`, vscode.DiagnosticSeverity.Warning, prop.loc);
                                 }
                             } else {
-                                this.parser.state.pushDiag(`Unable to fetch addr and size count`, vscode.DiagnosticSeverity.Error, prop.loc);
+                                pushDiag(`Unable to fetch addr and size count`, vscode.DiagnosticSeverity.Error, prop.loc);
 
                             }
                         } else if (prop.name === 'compatible') {
                             var propText = doc.getText(prop.loc.range);
                             var types: string[] = typeof prop.value.actual === 'string' ? [prop.value.actual] : prop.value.actual as string[];
                             var type = types.map(t => {
-                                var type = this.types.get(t, node.name);
+                                var type = this.types.get(t);
                                 if (!type) {
-                                    this.parser.state.pushDiag(`Unknown node type ${t}`, vscode.DiagnosticSeverity.Warning, prop.loc);
+                                    pushDiag(`Unknown node type ${t}`, vscode.DiagnosticSeverity.Warning, prop.loc);
                                 }
                                 return type;
                             }).find(t => t);
 
                             if (type && type['parent-bus'] && parentType) {
                                 if (parentType['child-bus'] !== type['parent-bus']) {
-                                    this.parser.state.pushDiag(`Invalid bus: Node exists on bus "${type['parent-bus']}", parent bus is "${parentType['child-bus']}" `, vscode.DiagnosticSeverity.Error, entry.nameLoc);
+                                    pushDiag(`Invalid bus: Node exists on bus "${type['parent-bus']}", parent bus is "${parentType['child-bus']}" `, vscode.DiagnosticSeverity.Error, entry.nameLoc);
                                 }
                             }
 
                         } else if (prop.name === 'status') {
                             if (prop.value.actual === 'disabled') {
                                 node.entries.filter(e => e.loc.uri.fsPath === doc.uri.fsPath).forEach(e => {
-                                    let diag = this.parser.state.pushDiag(`Disabled`, vscode.DiagnosticSeverity.Hint, e.nameLoc);
+                                    let diag = pushDiag(`Disabled`, vscode.DiagnosticSeverity.Hint, e.nameLoc);
                                     diag.tags = [vscode.DiagnosticTag.Unnecessary];
                                     diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(prop.loc.uri, prop.loc.range), `Disabled here`)];
                                 });
@@ -434,26 +470,27 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                                         pushDiag(`PHandle array must have ${c.value.actual} number cells`, vscode.DiagnosticSeverity.Error, prop.loc);
                                     }
                                 } else {
-                                    this.parser.state.pushDiag(`Parent's *-cells property must be an int`, vscode.DiagnosticSeverity.Error, prop.loc);
+                                    pushDiag(`Parent's *-cells property must be an int`, vscode.DiagnosticSeverity.Error, prop.loc);
                                 }
                             }
                         }
                     }
                 } else if (propType.required) {
                     let status = props.find(p => p.name === 'status');
-                    this.parser.state.pushDiag(`Property "${propType.name}" is required`, (status && status.value.raw === 'okay') ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Information, entry.nameLoc);
+                    pushDiag(`Property "${propType.name}" is required`, (status && status.value.raw === 'okay') ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Information, entry.nameLoc);
                 }
             });
 
             entry.properties.forEach(p => {
                 if (!type.properties.find(t => t.name === p.name)) {
-                    this.parser.state.pushDiag(`Property not mentioned in type "${type.name ?? parentType.name + '::child-node'}"`, vscode.DiagnosticSeverity.Warning, p.loc);
+                    pushDiag(`Property not mentioned in type "${type.name ?? parentType.name + '::child-node'}"`, vscode.DiagnosticSeverity.Warning, p.loc);
                 }
             });
         }
 
         topLevelEntries.forEach(e => annotateNode(e));
-        (<any>Object).values(this.parser.state.diags).forEach((d: parser.DiagCollection) => this.diags.set(d.uri, d.diags));
+
+        (<any>Object).values(diags).forEach((d: parser.DiagCollection) => this.diags.set(d.uri, d.diags));
     }
 
     provideDocumentSymbols(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.SymbolInformation[]> {
@@ -535,7 +572,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
     }
 
     provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Hover> {
-        let line = this.parser.state.lines.find(l => l.uri.fsPath === document.uri.fsPath && l.number === position.line);
+        let line = this.parser.state?.lines.find(l => l.uri.fsPath === document.uri.fsPath && l.number === position.line);
         if (line) {
             let m = line.macros.find(m => position.character >= m.start && position.character < m.start + m.raw.length);
             if (m) {
@@ -1087,14 +1124,14 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
 
     provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.DocumentLink[]> {
-        return this.parser.state.fileInclusions.filter(i => i.line.uri.fsPath === document.uri.fsPath).map(i => {
+        return this.parser.state?.fileInclusions.filter(i => i.line.uri.fsPath === document.uri.fsPath).map(i => {
             let file = i.line.raw.match(/".*?"|<.*?>/);
 
             let range = new vscode.Range(i.line.number, file.index!, i.line.number, file.index! + file[0].length);
             let link = new vscode.DocumentLink(range, i.file);
             link.tooltip = i.file.fsPath;
             return link;
-        });
+        }) ?? [];
     }
 }
 

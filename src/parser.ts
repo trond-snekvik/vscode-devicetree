@@ -1038,33 +1038,38 @@ export class Parser {
     state?: ParserState;
     nodes: {[fullPath: string]: Node};
     root?: Node;
-    docs: { [path: string]: {version: number, topLevelEntries: NodeEntry[], diags: {[uri: string]: DiagCollection} }};
+    uri: vscode.Uri;
+    version: number;
+    topLevelEntries: NodeEntry[];
 
     constructor() {
         this.nodes = {};
-        this.docs = {};
+        this.version = -1;
+        this.topLevelEntries = [];
     }
 
     nodeArray() {
         return Object.keys(this.nodes).map(k => this.nodes[k]);
     }
 
-    cleanFile(doc: vscode.TextDocument) {
-        this.nodeArray().forEach(n => {
-            n.entries = n.entries.filter(e => e.loc.uri.fsPath !== doc.uri.fsPath);
-        });
+    reset() {
+        this.nodes = {};
+        this.version = -1;
+        this.topLevelEntries = [];
+        this.root = null;
     }
 
     parse(text: string, doc: vscode.TextDocument, documentVersion?: number): NodeEntry[] {
         if (documentVersion !== undefined) {
-            if (this.docs[doc.uri.fsPath] && this.docs[doc.uri.fsPath].version === documentVersion) {
-                return this.docs[doc.uri.fsPath].topLevelEntries; /* No need to reparse */
+            if (this.uri.fsPath === doc.uri.fsPath && this.version === documentVersion) {
+                return this.topLevelEntries; /* No need to reparse */
             }
 
-            this.docs[doc.uri.fsPath] = {version: documentVersion, topLevelEntries: [], diags: {}};
+            this.reset();
+            this.uri = doc.uri;
+            this.version = documentVersion;
         }
 
-        this.cleanFile(doc);
         this.state = new ParserState(text, doc.uri);
         var timeStart = process.hrtime();
         var nodeStack: NodeEntry[] = [];
@@ -1135,7 +1140,7 @@ export class Parser {
                     node.entries.push(entry);
 
                     if (nodeStack.length === 0) {
-                        this.docs[doc.uri.fsPath].topLevelEntries.push(entry);
+                        this.topLevelEntries.push(entry);
                     }
 
                     if (nodeStack[nodeStack.length - 1].children.indexOf(entry) === -1) {
@@ -1201,7 +1206,7 @@ export class Parser {
                 node.entries.push(entry);
                 entry.ref = refMatch[1];
                 if (nodeStack.length === 0) {
-                    this.docs[doc.uri.fsPath].topLevelEntries.push(entry);
+                    this.topLevelEntries.push(entry);
                 }
 
                 nodeStack.push(entry);
@@ -1277,7 +1282,7 @@ export class Parser {
                 }
                 var entry = new NodeEntry(this.state.location(), this.root, new vscode.Location(this.state.location().uri, this.state.location().range.start));
                 this.root.entries.push(entry);
-                this.docs[doc.uri.fsPath].topLevelEntries.push(entry);
+                this.topLevelEntries.push(entry);
                 nodeStack.push(entry);
                 continue;
             }
@@ -1310,8 +1315,7 @@ export class Parser {
 
         console.log(`Parsed ${doc.uri.fsPath} in ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
 
-        this.docs[doc.uri.fsPath].diags = this.state.diags;
-        return this.docs[doc.uri.fsPath].topLevelEntries;
+        return this.topLevelEntries;
     }
 
     getNode(search: string): Node | undefined {

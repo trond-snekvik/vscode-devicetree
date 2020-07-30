@@ -1,12 +1,12 @@
 'use strict';
 import * as vscode from 'vscode';
-import * as parser from './parser';
+import * as dts from './dts';
 import * as types from './types';
-import * as glob from 'glob';
-import { readFileSync } from 'fs';
+import {lint, LintCtx} from './lint';
 import * as path from 'path';
-import { isArray } from 'util';
+import * as fs from 'fs';
 import { execSync } from 'child_process'
+import { DiagnosticsSet } from './diags';
 
 function getConfig(variable: string) {
     var config = vscode.workspace.getConfiguration('devicetree');
@@ -45,18 +45,21 @@ function getBindingDirs(): string[] {
     return paths;
 }
 
-function getBoardFile(dir: string): string {
+function getBoardFile(): string {
     var boardFile: string;
     boardFile = getConfig('devicetree.boardFile') as string;
     if (!boardFile) {
-        boardFile = getConfig('kconfig.board.dir') as string;
+        const kconfigBoard = getConfig('kconfig.zephyr.board');
+        if (kconfigBoard && kconfigBoard['dir'] && kconfigBoard['board']) {
+            boardFile = kconfigBoard['dir'] + path.sep + kconfigBoard['board'] + '.dts';
+        }
     }
 
     if (!boardFile) {
         boardFile = '${ZEPHYR_BASE}/boards/arm/nrf52dk_nrf52832/nrf52dk_nrf52832.dts';
     }
 
-    return path.resolve(boardFile.replace(/\${(.+?)}/g, (fullMatch: string, variable: string) => {
+    return path.resolve(vscode.workspace.workspaceFolders[0]?.uri.fsPath ?? '.', boardFile.replace(/\${(.+?)}/g, (fullMatch: string, variable: string) => {
             if (variable.startsWith('workspaceFolder')) {
                 if (vscode.workspace.workspaceFolders.length === 0) {
                     return '';
@@ -78,8 +81,8 @@ function getBoardFile(dir: string): string {
             }
 
             if (variable === 'ZEPHYR_BASE') {
+                const options = { cwd: vscode.workspace.workspaceFolders[0]?.uri.fsPath };
                 try {
-                    const options = { cwd: dir };
                     let topdir = execSync('west topdir', options).toString('utf-8');
                     let zephyrBase = execSync('west config zephyr.base', options).toString('utf-8');
                     return topdir.trim() + path.sep + zephyrBase.trim();
@@ -88,18 +91,18 @@ function getBoardFile(dir: string): string {
                 }
             }
 
-            return fullMatch;
+            return '';
     }));
 }
 
-function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString, parent?: parser.Node, parentType?: types.NodeType, node?: parser.Node) {
+function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString, node?: dts.Node) {
     switch (p.type) {
         case 'boolean':
             snippet.appendText(p.name);
             break;
         case 'array':
             snippet.appendText(p.name + ' = < ');
-            var cells = getCells(p.name, parent);
+            var cells = dts.getCells(p.name, node?.parent);
             if (cells) {
                 cells.forEach((c, i) => {
                     if (node && i === 0 && p.name === 'reg' && !isNaN(node.address)) {
@@ -153,11 +156,11 @@ function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString,
             snippet.appendPlaceholder('label');
             var cellNames: string[] = []
             var cellsName = `${p.name.slice(0, p.name.length - 1)}-cells`;
-            if (p.name.endsWith('s') && parentType && cellsName in parentType) {
-                cellNames = parentType[cellsName];
+            if (p.name.endsWith('s') && node?.parent?.type && cellsName in node.parent.type) {
+                cellNames = node.parent.type[cellsName];
             }
 
-            Array(getPHandleCells(p.name, parent)).forEach((_, i) => {
+            Array(dts.getPHandleCells(p.name, node?.parent)).forEach((_, i) => {
                 (<vscode.SnippetString>snippet).appendText(' ');
                 if (i < cellNames.length) {
                     (<vscode.SnippetString>snippet).appendPlaceholder(cellNames[i]);
@@ -181,362 +184,149 @@ function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString,
     snippet.appendText(';')
 };
 
-function getCells(propName: string, parent?: parser.Node): string[] | undefined {
-    var cellProp = getPHandleCells(propName, parent);
-
-    if (cellProp) {
-        return ['label'].concat(Array(<number> cellProp.value.actual).fill('cell'));
-    }
-
-    if (propName === 'reg') {
-        var addrCells = 2;
-        var sizeCells = 1;
-        if (parent) {
-            var parentProps = parent.uniqueProperties();
-
-            var addrCellsProp = parentProps.find(p => p.name === '#address-cells');
-            if (addrCellsProp) {
-                addrCells = addrCellsProp.value.actual as number;
-            }
-
-            var sizeCellsProp = parentProps.find(p => p.name === '#size-cells');
-            if (sizeCellsProp) {
-                sizeCells = sizeCellsProp.value.actual as number;
-            }
-        }
-        return Array(addrCells).fill('addr').concat(Array(sizeCells).fill('size'));
-    }
-}
-
-function getPHandleCells(propname: string, parent?: parser.Node): parser.Property {
-    if (propname.endsWith('s') && parent) {
-        /* Weird rule: phandle array cell count is determined by the #XXX-cells entry in the parent,
-         * where XXX is the singular version of the name of this property UNLESS the property is called XXX-gpios, in which
-         * case the cell count is determined by the parent's #gpio-cells property
-         */
-        var cellName = propname.endsWith('-gpios') ? '#gpio-cells' : ('#' + propname.slice(0, propname.length) + '-cells')
-        return parent.property(cellName);
-    }
-}
-
 class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvider, vscode.HoverProvider, vscode.CompletionItemProvider, vscode.SignatureHelpProvider, vscode.DocumentRangeFormattingEditProvider, vscode.DocumentLinkProvider {
-    parser: parser.Parser;
+    parser: dts.Parser;
     diags: vscode.DiagnosticCollection;
     types: types.TypeLoader;
+    prevDiagUris: vscode.Uri[] = [];
 
     constructor(context: vscode.ExtensionContext) {
-        this.parser = new parser.Parser();
+        this.diags = vscode.languages.createDiagnosticCollection('DeviceTree');
         this.types = new types.TypeLoader();
-        this.diags = vscode.languages.createDiagnosticCollection('Devicetree');
+
+        const timeStart = process.hrtime();
         var bindingDirs = getBindingDirs();
         bindingDirs.forEach(d => this.types.addFolder(d));
-        console.log(`Found ${Object.keys(this.types.types).length} bindings in ${bindingDirs.join(', ')}`);
+        const procTime = process.hrtime(timeStart);
+        console.log(`Found ${Object.keys(this.types.types).length} bindings in ${bindingDirs.join(', ')}. ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
 
-        if (vscode.window.activeTextEditor) {
-            this.setDoc(vscode.window.activeTextEditor.document)
-        }
-        context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => this.setDoc(editor.document)));
-        context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(change => this.parseDoc(change.document)));
+        const defines = getConfig('deviceTree.defines') ?? {};
+        const includes = getConfig('deviceTree.includes') as string[] ?? [
+            vscode.workspace.workspaceFolders[0].uri.fsPath + '/include',
+            vscode.workspace.workspaceFolders[0].uri.fsPath + '/dts/common',
+            vscode.workspace.workspaceFolders[0].uri.fsPath + '/dts/arm',
+            vscode.workspace.workspaceFolders[0].uri.fsPath + '/dts',
+        ];
+
+        this.parser = new dts.Parser(defines, includes, this.types);
+
+        this.parseBoardFile().then(() => {
+            if (vscode.window.activeTextEditor) {
+                this.setDoc(vscode.window.activeTextEditor.document)
+            }
+        });
+
+        context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(async editor => await this.setDoc(editor.document)));
+        context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(async change => {
+            await this.parser.onChange(change);
+            let lintCtx: LintCtx =  {
+                diags: new DiagnosticsSet(),
+                parser: this.parser,
+                types: this.types,
+            };
+
+            lint(this.parser.entries, lintCtx);
+            let diags = this.parser.getDiags();
+            diags.merge(lintCtx.diags);
+            this.setDiags(diags);
+        }));
     }
 
-    addMissing(entry: parser.NodeEntry, propType: types.PropertyType) {
+    private setDiags(diags: DiagnosticsSet) {
+        this.prevDiagUris.filter(uri => !diags.all.find(set => uri.toString() === set.uri.toString())).forEach(uri => this.diags.set(uri, []));
+        diags.all.forEach(d => this.diags.set(d.uri, d.diags));
+        this.prevDiagUris = diags.all.map(set => set.uri);
+    }
+
+    addMissing(entry: dts.NodeEntry, propType: types.PropertyType) {
         if (!vscode.window.activeTextEditor || vscode.window.activeTextEditor.document.uri.fsPath !== entry.loc.uri.fsPath) {
             return;
         }
         var indent = vscode.window.activeTextEditor.options.insertSpaces ? ' '.repeat(vscode.window.activeTextEditor.options.tabSize as number) : '\t';
         var line = entry.loc.range.end.line;
         var snippet = new vscode.SnippetString(`\n${indent}${propType.name} = `);
-        appendPropSnippet(propType, snippet, entry.node.parent, entry.node.parent && this.types.nodeType(entry.node.parent, undefined, this.parser.state), entry.node);
+        appendPropSnippet(propType, snippet, entry.node);
         vscode.window.activeTextEditor.insertSnippet(snippet, new vscode.Position(line - 1, 99999999));
     }
 
-    setDoc(document: vscode.TextDocument) {
-        if (document.languageId !== 'dts') {
-            return;
+    private async parseBoardFile() {
+        var boardFile = getBoardFile();
+        if (fs.existsSync(boardFile)) {
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(boardFile));
+            await this.parser.setBoardFile(doc);
+            const diags = this.parser.getDiags();
+            diags.all.forEach(d => this.diags.set(d.uri, d.diags));
+        } else {
+            vscode.window.showErrorMessage(`Unable to open DeviceTree board file ${boardFile}.`, 'Configure...').then(() => {
+                vscode.commands.executeCommand('workbench.action.openSettings', 'deviceTree.boardFile');
+            });
         }
-
-        if (document.uri.fsPath in this.parser.docs) {
-            return;
-        }
-
-        this.parser = new parser.Parser();
-
-        var dir = document.uri.fsPath.replace(/[\\/][^\\/]+$/, '').replace(/\\/g, '/');
-        var boardFile = getBoardFile(dir);
-
-        vscode.workspace.openTextDocument(boardFile).then(boardDoc => {
-            this.parseDoc(boardDoc);
-            this.parseDoc(document);
-        }, () => {
-            this.parseDoc(document);
-        });
     }
 
-    parseDoc(doc: vscode.TextDocument) {
-        if (doc.languageId !== 'dts') {
+    async setDoc(doc: vscode.TextDocument) {
+        if (doc.languageId !== 'dts' || this.parser.ctx(doc.uri)) {
             return;
         }
 
-        var topLevelEntries = this.parser.parse(doc.getText(), doc, doc.version);
-        var diags: {[fsPath: string]: parser.DiagCollection } = {};
-        (Object.keys(this.parser.state!.diags).forEach(k => diags[k] = { uri: this.parser.state!.diags[k].uri, diags: [...this.parser.state!.diags[k].diags] }));
-        const pushDiag = (msg: string, severity: vscode.DiagnosticSeverity, loc: vscode.Location) => {
-            if (!(loc.uri.fsPath in diags)) {
-                diags[loc.uri.fsPath] = {uri: loc.uri, diags: []};
-            }
+        await this.parser.setFile(doc);
 
-            let diag = new vscode.Diagnostic(loc.range, msg, severity);
-            diags[loc.uri.fsPath].diags.push(diag);
-            return diag;
+        const lintCtx: LintCtx =  {
+            diags: new DiagnosticsSet(),
+            parser: this.parser,
+            types: this.types,
         };
 
-        var annotateNode = (entry: parser.NodeEntry, parentType?: types.NodeType) => {
-            var node = entry.node;
-            const props = node.properties();
-            var type: types.NodeType;
-
-            var type = this.types.nodeType(node, parentType, this.parser.state);
-
-            if (node.fullName === 'aliases' || node.fullName === 'chosen') {
-                if (node.path === '/aliases/' || node.path === '/chosen/') {
-                    if (node.children().length > 0) {
-                        pushDiag(`Node ${node.name} shouldn't have child nodes`, vscode.DiagnosticSeverity.Error, entry.nameLoc);
-                    }
-
-                    entry.properties.forEach(p => {
-                        if (p.value.raw.startsWith('&')) {
-                            var ref = this.parser.getNode(p.value.raw);
-                            if (!ref) {
-                                pushDiag(`Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error, p.loc);
-                            }
-                        } else if (typeof p.value.actual === 'string') {
-                            var ref = this.parser.getNode(p.value.actual);
-                            if (!ref) {
-                                pushDiag(`Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error, p.loc);
-                            }
-                        } else {
-                            pushDiag(`Properties in ${node.name} must be references to nodes`, vscode.DiagnosticSeverity.Error, p.loc);
-                        }
-                    });
-                } else {
-                    pushDiag(`Node ${node.name} must be under the root node`, vscode.DiagnosticSeverity.Error, entry.nameLoc);
-                }
-                return;
-            }
-
-            if (node.fullName === 'cpus') {
-                if (node.path !== '/cpus/') {
-                    pushDiag(`Node cpus must be directly under the root node`, vscode.DiagnosticSeverity.Error, entry.nameLoc);
-                }
-            }
-
-            entry.children.forEach(c => annotateNode(c, type));
-
-            // Check overlapping ranges
-            if (props.find(p => p.name === '#address-cells' && p.value.actual === 1) && props.find(p => p.name === '#size-cells' && p.value.actual === 1)) {
-                let ranges = new Array<{n: parser.NodeEntry, start: number, size: number}>();
-                entry.children.forEach(c => {
-                    let reg = c.properties.find(p => p.name === 'reg');
-                    if (c.node.enabled() && reg && isArray(reg.value.actual)) {
-                        let range = {n: c, start: reg.value.actual[0], size: reg.value.actual[1]};
-                        let overlap = ranges.find(r => r.start + r.size > range.start && range.start + range.size > r.start);
-                        if (overlap) {
-                            let diag = pushDiag(`Range overlaps with ${overlap.n.node.fullName}`, vscode.DiagnosticSeverity.Warning, c.nameLoc);
-                            if (overlap.start < range.start) {
-                                diag.message += ` (ends at 0x${(overlap.start + overlap.size).toString(16)})`;
-                            } else {
-                                diag.message += ` (${c.node.fullName} ends at 0x${(range.start + range.size).toString(16)})`;
-                            }
-                            diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(overlap.n.nameLoc.uri, overlap.n.nameLoc.range), `${overlap.n.node.fullName} declared here`)];
-                        }
-
-                        ranges.push(range);
-                    }
-                });
-            }
-
-            if (!type) {
-                pushDiag(`Unknown node type`, vscode.DiagnosticSeverity.Warning, entry.nameLoc);
-                return;
-            }
-
-            if (type['on-bus'] && type['on-bus'] !== parentType?.['bus']) {
-                pushDiag(`Node should only occur on the ${type['on-bus']} bus.`, vscode.DiagnosticSeverity.Error, entry.nameLoc);
-            }
-
-            type.properties.forEach(propType => {
-                var prop = props.find(p => p.name === propType.name);
-                if (prop) {
-                    prop = entry.properties.find(p => p.name === prop.name);
-                    if (prop) {
-                        var correctType = (type: types.PropertyTypeString) => {
-                            switch (type) {
-                                case 'array':
-                                    return (typeof prop.value.actual === 'number') || (Array.isArray(prop.value.actual) && (prop.value.actual as any[]).every(v => typeof v === 'number'));
-                                case 'boolean':
-                                    return (typeof prop.value.actual === 'boolean');
-                                case 'compound':
-                                    return true; // any
-                                case 'int':
-                                    return (typeof prop.value.actual === 'number');
-                                case 'phandle':
-                                    /* PHandles can be numbers if there's a node with that number as the value of their phandle property. */
-                                    return ((typeof prop.value.actual === 'object') && ('node' in prop.value.actual)) ||
-                                           ((typeof prop.value.actual === 'number') && (this.parser.getPHandleNode(prop.value.actual)));
-                                case 'phandle-array':
-                                    return (Array.isArray(prop.value.actual) && (prop.value.actual as any[]).every(v => typeof v === 'number' || (typeof v === 'string' && v.startsWith('&')))) ||
-                                            (typeof prop.value.actual === 'number' || (typeof prop.value.actual === 'string' && prop.value.actual.startsWith('&')));
-                                case 'string':
-                                    return (typeof prop.value.actual === 'string');
-                                case 'string-array':
-                                    return (typeof prop.value.actual === 'string') || (Array.isArray(prop.value.actual) && (prop.value.actual as any[]).every(v => typeof v === 'string'));
-                                case 'uint8-array':
-                                    return (Array.isArray(prop.value.actual) && (prop.value.actual as any[]).every(v => typeof v === 'number') && prop.value.raw.match(/\[[\da-fA-F\s]+\]/));
-                                default:
-                                    return true;
-                            }
-                        };
-
-                        if (Array.isArray(propType.type)) {
-                            if (!propType.type.find(correctType)) {
-                                pushDiag('Property value type must be one of ' + propType.type.join(', '), vscode.DiagnosticSeverity.Warning, prop.loc);
-                            }
-                        } else if (!correctType(propType.type)) {
-                            pushDiag(`Property value type must be ${propType.type}`, vscode.DiagnosticSeverity.Warning, prop.loc);
-                        }
-
-                        if (propType.enum && propType.enum.indexOf(prop.value.actual.toString()) < 0) {
-                            pushDiag('Property value must be one of ' + propType.enum.join(', '), vscode.DiagnosticSeverity.Warning, prop.loc);
-                        }
-
-                        if (propType.const !== undefined && propType.const !== prop.value.actual) {
-                            pushDiag(`Property value must be ${propType.const}`, vscode.DiagnosticSeverity.Warning, prop.loc);
-                        }
-
-                        if (propType.type === 'phandle-array') {
-                            var propText = doc.getText(prop.loc.range) as string;
-                            (<(string | number)[]>prop.value.actual).forEach(e => {
-                                if (typeof e === 'string' && !this.parser.getPHandleNode(e.slice(1))) {
-                                    pushDiag(`Unknown label`, vscode.DiagnosticSeverity.Warning, prop.loc);
-                                }
-                            })
-                        }
-
-                        if (prop.name === 'reg') {
-                            var cells = getCells(prop.name, node.parent);
-
-                            if (cells) {
-                                if ((typeof prop.value.actual === 'number' && cells.length !== 1) ||
-                                    (Array.isArray(prop.value.actual) && prop.value.actual.length !== cells.length)) {
-                                    pushDiag(`reg property must be on format <${cells.join(' ')}>`, vscode.DiagnosticSeverity.Error, prop.loc);
-                                } else if (cells.length > 0 && cells[0] === 'addr' && node.address !== NaN && node.address !== prop.value.actual && node.address !== prop.value.actual[0]) {
-                                    pushDiag(`Node address does not match address cell (expected 0x${node.address.toString(16)})`, vscode.DiagnosticSeverity.Warning, prop.loc);
-                                }
-                            } else {
-                                pushDiag(`Unable to fetch addr and size count`, vscode.DiagnosticSeverity.Error, prop.loc);
-
-                            }
-                        } else if (prop.name === 'compatible') {
-                            var propText = doc.getText(prop.loc.range);
-                            var types: string[] = typeof prop.value.actual === 'string' ? [prop.value.actual] : prop.value.actual as string[];
-                            var type = types.map(t => {
-                                var type = this.types.get(t);
-                                if (!type) {
-                                    pushDiag(`Unknown node type ${t}`, vscode.DiagnosticSeverity.Warning, prop.loc);
-                                }
-                                return type;
-                            }).find(t => t);
-
-                            if (type && type['parent-bus'] && parentType) {
-                                if (parentType['child-bus'] !== type['parent-bus']) {
-                                    pushDiag(`Invalid bus: Node exists on bus "${type['parent-bus']}", parent bus is "${parentType['child-bus']}" `, vscode.DiagnosticSeverity.Error, entry.nameLoc);
-                                }
-                            }
-
-                        } else if (prop.name === 'status') {
-                            if (prop.value.actual === 'disabled') {
-                                node.entries.filter(e => e.loc.uri.fsPath === doc.uri.fsPath).forEach(e => {
-                                    let diag = pushDiag(`Disabled`, vscode.DiagnosticSeverity.Hint, e.nameLoc);
-                                    diag.tags = [vscode.DiagnosticTag.Unnecessary];
-                                    diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(prop.loc.uri, prop.loc.range), `Disabled here`)];
-                                });
-                            }
-                        } else if (propType.type === 'phandle-array' && Array.isArray(prop.value.actual)) {
-                            let c = getPHandleCells(prop.name, node.parent);
-                            if (c) {
-                                let value = c.value.actual as (string | number)[];
-                                if (typeof c.value.actual === 'number') {
-                                    if ((value.length % (c.value.actual + 1)) !== 0) {
-                                        pushDiag(`PHandle array must have ${c.value.actual} number cells`, vscode.DiagnosticSeverity.Error, prop.loc);
-                                    }
-                                } else {
-                                    pushDiag(`Parent's *-cells property must be an int`, vscode.DiagnosticSeverity.Error, prop.loc);
-                                }
-                            }
-                        }
-                    }
-                } else if (propType.required) {
-                    let status = props.find(p => p.name === 'status');
-                    pushDiag(`Property "${propType.name}" is required`, (status && status.value.raw === 'okay') ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Information, entry.nameLoc);
-                }
-            });
-
-            entry.properties.forEach(p => {
-                if (!type.properties.find(t => t.name === p.name)) {
-                    pushDiag(`Property not mentioned in type "${type.name ?? parentType.name + '::child-node'}"`, vscode.DiagnosticSeverity.Warning, p.loc);
-                }
-            });
-        }
-
-        topLevelEntries.forEach(e => annotateNode(e));
-
-        (<any>Object).values(diags).forEach((d: parser.DiagCollection) => this.diags.set(d.uri, d.diags));
+        lint(this.parser.entries, lintCtx);
+        const diags = this.parser.getDiags();
+        diags.merge(lintCtx.diags);
+        this.setDiags(diags);
     }
 
     provideDocumentSymbols(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.SymbolInformation[]> {
-        var propSymbolKind = (p: parser.Property) => {
+        var propSymbolKind = (p: dts.Property) => {
             if (p.name.startsWith('#')) {
                 return vscode.SymbolKind.Number;
             }
-            switch (typeof p.value.actual) {
-                case 'boolean': return vscode.SymbolKind.Boolean;
-                case 'number': return vscode.SymbolKind.Operator;
-                case 'string':
-                    if (p.name === 'compatible') {
-                        return vscode.SymbolKind.TypeParameter;
-                    }
-                    if (p.name === 'status') {
-                        return vscode.SymbolKind.Event;
-                    }
-                    return vscode.SymbolKind.String;
-                default:
-                    if (Array.isArray(p.value.actual)) {
-                        if (typeof p.value.actual[0] === 'string') {
-                            return vscode.SymbolKind.String;
-                        }
-                        if (p.value.raw.startsWith('[')) {
-                            return vscode.SymbolKind.Array;
-                        }
-                    }
-                    if (p.value.raw.startsWith('&')) {
-                        return vscode.SymbolKind.Interface;
-                    }
-                    return vscode.SymbolKind.Object;
+
+            if (p.name === 'compatible') {
+                return vscode.SymbolKind.TypeParameter;
             }
+            if (p.name === 'status') {
+                return vscode.SymbolKind.Event;
+            }
+            if (Array.isArray(p.value.actual)) {
+                if (p.value.actual.every(e => typeof e === 'string')) {
+                    return vscode.SymbolKind.String;
+                }
+
+                if (p.value.raw.startsWith('[')) {
+                    return vscode.SymbolKind.Array;
+                }
+            }
+            if (p.value.raw.startsWith('&')) {
+                return vscode.SymbolKind.Variable;
+            }
+            return vscode.SymbolKind.Property;
         };
 
         var symbols: vscode.SymbolInformation[] = [];
-        this.parser.nodeArray().forEach(n => {
-            n.entries.filter(e => e.loc.uri.fsPath === document.uri.fsPath).map(e => {
-                var node = new vscode.SymbolInformation(e.node.fullName, vscode.SymbolKind.Class, e.node.parent && e.node.parent.fullName, new vscode.Location(document.uri, e.loc.range));
-                symbols.push(node);
-                symbols.push(...e.properties.map(p => new vscode.SymbolInformation(p.name, propSymbolKind(p), e.node.fullName, new vscode.Location(document.uri, p.loc.range))));
-            });
-        });
+
+        const addSymbol = (e: dts.NodeEntry) => {
+            if (e.loc.uri.toString() !== document.uri.toString()) {
+                return;
+            }
+
+            var node = new vscode.SymbolInformation(e.node.fullName, vscode.SymbolKind.Class, e.parent?.node?.fullName, e.loc);
+            symbols.push(node);
+            symbols.push(...e.properties.map(p => new vscode.SymbolInformation(p.name, propSymbolKind(p), e.node.fullName, p.loc)));
+            e.children.forEach(addSymbol);
+        };
+
+        this.parser.ctx(document.uri)?.roots.forEach(addSymbol);
         return symbols;
     }
 
-    getNodeDefinition(document: vscode.TextDocument, position: vscode.Position): [vscode.Range, parser.Node] | undefined {
+    getNodeDefinition(document: vscode.TextDocument, position: vscode.Position): [vscode.Range, dts.Node] | undefined {
         var word = document.getWordRangeAtPosition(position, /&[\w\-]+/);
         if (word) {
             var symbol = document.getText(word);
@@ -554,7 +344,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
             if (symbol) {
                 symbol = symbol.slice(1, symbol.length - 1);
-                var property = this.parser.getPropertyAt(position, document);
+                var property = this.parser.getPropertyAt(position, document.uri);
                 if (!property) {
                     return;
                 }
@@ -572,7 +362,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
     }
 
     provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Hover> {
-        let line = this.parser.state?.lines.find(l => l.uri.fsPath === document.uri.fsPath && l.number === position.line);
+        let line = this.parser.ctx(document.uri)?.lines.find(l => l.uri.fsPath === document.uri.fsPath && l.number === position.line);
         if (line) {
             let m = line.macros.find(m => position.character >= m.start && position.character < m.start + m.raw.length);
             if (m) {
@@ -589,11 +379,11 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
             expanded += node.uniqueProperties().map(p => `\n\t${p.toString()};`).join('');
             expanded += node.children().reduce((array, curr) => {
-                if (!array.find(c => c.name === curr.name)) {
+                if (!array.find(c => c.fullName === curr.fullName)) {
                     array.push(curr);
                 }
                 return array;
-            }, new Array<parser.Node>()).map(c => `\n\t${c.name} { /* ... */ };`).join('');
+            }, new Array<dts.Node>()).map(c => `\n\t${c.fullName} { /* ... */ };`).join('');
             expanded += '\n};';
 
             return new vscode.Hover([new vscode.MarkdownString('`' + node.path + '`'), {language: 'dts', value: expanded}], bundle[0]);
@@ -605,11 +395,11 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             return;
         }
         var symbol = document.getText(word);
-        var node = this.parser.getNodeAt(position, document);
+        var node = this.parser.getNodeAt(position, document.uri);
         if (!node) {
             return;
         }
-        var type = this.types.nodeType(node, node.parent && this.types.nodeType(node.parent));
+        var type = this.types.nodeType(node);
         var prop = type.properties.find(p => p.name === symbol);
         if (prop) {
             var results: vscode.MarkedString[] = [];
@@ -641,15 +431,12 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             var range = document.getWordRangeAtPosition(position, /[\w\-\.,]+\.ya?ml/);
             var text = document.getText(range);
             if (text) {
-                var type = Object.keys(this.types.types).map(t => this.types.types[t]).find(t => t?.filename.match(new RegExp('.*/' + text)));
-                if (type) {
-                    return new vscode.Location(vscode.Uri.file(type.filename), new vscode.Position(0, 0));
-                }
+                return Object.values(this.types.types).find(t => t.find(tt => tt.filename.match(new RegExp('.*/' + text)))).map(t => new vscode.Location(vscode.Uri.file(t.filename), new vscode.Position(0, 0)));
             }
-            return;
+            return [];
         }
 
-        let line = this.parser.state.lines.find(l => l.uri.fsPath === document.uri.fsPath && l.number === position.line);
+        let line = this.parser.ctx(document.uri)?.lines.find(l => l.uri.fsPath === document.uri.fsPath && l.number === position.line);
         if (line) {
             let m = line.macros.find(m => position.character >= m.start && position.character < m.start + m.raw.length);
             if (m) {
@@ -672,7 +459,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
         if (symbol) {
             symbol = symbol.slice(1, symbol.length - 1);
-            var property = this.parser.getPropertyAt(position, document);
+            var property = this.parser.getPropertyAt(position, document.uri);
             if (!property) {
                 return;
             }
@@ -690,7 +477,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         if (item.kind === vscode.CompletionItemKind.Class) {
             var node = this.parser.getNode(item.label);
             if (node) {
-                var type = this.types.nodeType(node, node.parent && this.types.nodeType(node.parent));
+                var type = this.types.nodeType(node);
                 if (type) {
                     item.documentation = new vscode.MarkdownString();
                     if (type.description) {
@@ -703,23 +490,31 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
     }
 
     provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.CompletionContext): vscode.ProviderResult<vscode.CompletionItem[] | vscode.CompletionList> {
-        var node = this.parser.getNodeAt(position, document);
+        let node = this.parser.getNodeAt(position, document.uri);
 
-        var labelItems = (asNode: boolean) => {
-            var labels: {label: string, node: parser.Node, type?: types.NodeType}[] = [];
-            Object.keys(this.parser.nodes).forEach(name => {
-                var node = this.parser.nodes[name];
-                var t = this.types.get(node.name);
-                labels.push(...node.labels().map(l => {return {label: l, node: node, type: t}; }));
+        let lineRange = new vscode.Range(position.line, 0, position.line, 999999);
+        let line = document.getText(lineRange);
+        let before = line.slice(0, position.character);
+
+        let labelItems = (asNode: boolean) => {
+            let labels: {label: string, node: dts.Node, type?: types.NodeType}[] = [];
+            Object.values(this.parser.nodes).forEach(node => {
+                let type = this.types.nodeType(node);
+                labels.push(...node.labels().map(label => { return { label, node, type }; }));
             });
 
+            const withAmp = before.match(/^[\w\-]*$/);
+
             return labels.map(l => {
-                var completion = new vscode.CompletionItem(`&${l.label}`, vscode.CompletionItemKind.Class);
+                let completion = new vscode.CompletionItem(`&${l.label}`, vscode.CompletionItemKind.Class);
                 if (asNode) {
-                    completion.insertText = new vscode.SnippetString(completion.label + ' {\n\t');
+                    completion.insertText = new vscode.SnippetString((withAmp ? completion.label : l.label) + ' {\n\t');
                     completion.insertText.appendTabstop();
                     completion.insertText.appendText('\n};\n');
+                } else if (!withAmp) {
+                    completion.insertText = l.label;
                 }
+
                 completion.detail = l.node.path;
                 if (l.type) {
                     completion.documentation = new vscode.MarkdownString(`**${l.type.title}**\n\n${l.type.description}`);
@@ -728,11 +523,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             });
         }
 
-
-        var lineRange = new vscode.Range(position.line, 0, position.line, 999999);
-        var line = document.getText(lineRange);
-
-        var deleteLine = line.slice(0, position.character).match(/\/delete-(node|property)\/\s+[^\s;]*$/);
+        let deleteLine = line.slice(0, position.character).match(/\/delete-(node|property)\/\s+[^\s;]*$/);
         if (deleteLine) {
             if (deleteLine[1] === 'node') {
                 if (node) {
@@ -745,8 +536,37 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             }
         }
 
+        const macros = this.parser.ctx(document.uri)?.macros.map(m => {
+            let item = new vscode.CompletionItem(m.name);
+            if (m.args) {
+                item.kind = vscode.CompletionItemKind.Function;
+                item.insertText = new vscode.SnippetString(m.name + '(');
+                m.args.forEach((a, i) => {
+                    (<vscode.SnippetString>item.insertText).appendPlaceholder(a);
+                    if (i < m.args.length - 1) {
+                        (<vscode.SnippetString>item.insertText).appendText(', ');
+                    }
+                });
+                item.insertText.appendText(')');
+            } else {
+                item.kind = vscode.CompletionItemKind.Constant;
+            }
+
+            if (item.label.startsWith('_')) { // Reserved macros go last
+                item.sortText = `~~~~${item.label}`;
+            } else {
+                item.sortText = `~~~${item.label}`;
+            }
+
+            return item;
+        }) ?? [];
+
         if (!node) {
-            var root = new vscode.CompletionItem('/', vscode.CompletionItemKind.Class);
+            if (before.match(/&[\w-]*$/)) {
+                return labelItems(true);
+            }
+
+            let root = new vscode.CompletionItem('/', vscode.CompletionItemKind.Class);
             root.insertText = new vscode.SnippetString('/ {\n\t');
             root.insertText.appendTabstop();
             root.insertText.appendText('\n};\n');
@@ -754,10 +574,10 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             root.documentation = 'The devicetree has a single root node of which all other device nodes are descendants. The full path to the root node is /.';
             root.preselect = true;
 
-            return [root, ...labelItems(true)];
+            return [root, ...labelItems(true), ...macros];
         }
 
-        var propValueTemplate = (value: string, propType: types.PropertyTypeString | types.PropertyTypeString[]) => {
+        let propValueTemplate = (value: string, propType: types.PropertyTypeString | types.PropertyTypeString[]) => {
             if (Array.isArray(propType)) {
                 propType = propType[0];
             }
@@ -772,17 +592,15 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             }
         }
 
-        var parentType = node.parent ? this.types.nodeType(node.parent) : undefined;
-        var type = this.types.nodeType(node, parentType);
+        let type = this.types.nodeType(node);
 
-        var property = this.parser.getPropertyAt(position, document);
+        let property = this.parser.getPropertyAt(position, document.uri);
         if (property) {
-            var before = line.slice(0, position.character);
             if (before.includes('=')) {
-                var after = line.slice(position.character);
+                let after = line.slice(position.character);
                 const surroundingBraces = [['<', '>'], ['"', '"'], ['[', ']']];
-                var braces = surroundingBraces.find(b => before.includes(b[0], before.indexOf('=')) && after.includes(b[1]));
-                var start: number, end: number;
+                let braces = surroundingBraces.find(b => before.includes(b[0], before.indexOf('=')) && after.includes(b[1]));
+                let start: number, end: number;
                 if (braces) {
                     start = line.slice(0, position.character).lastIndexOf(braces[0]) + 1;
                     end = line.indexOf(braces[1], position.character);
@@ -791,13 +609,13 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                     end = position.character + (after.indexOf(';') >= 0 ? after.indexOf(';') : after.length);
                 }
 
-                var range = new vscode.Range(position.line, start, position.line, end);
-                var propType = (type && type.properties.find(p => p.name === property[1].name));
+                let range = new vscode.Range(position.line, start, position.line, end);
+                let propType = (type && type.properties.find(p => p.name === property[1].name));
                 if (propType) {
                     if (propType.enum) {
-                        var filterText = document.getText(document.getWordRangeAtPosition(position));
+                        let filterText = document.getText(document.getWordRangeAtPosition(position));
                         return propType.enum.map(e => {
-                            var completion = new vscode.CompletionItem(e, vscode.CompletionItemKind.EnumMember);
+                            let completion = new vscode.CompletionItem(e, vscode.CompletionItemKind.EnumMember);
                             completion.range = range;
                             completion.filterText = filterText;
                             if (!braces) {
@@ -808,7 +626,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                     }
 
                     if (propType.const) {
-                        var completion = new vscode.CompletionItem(propType.const.toString(), vscode.CompletionItemKind.Constant);
+                        let completion = new vscode.CompletionItem(propType.const.toString(), vscode.CompletionItemKind.Constant);
                         completion.range = range;
                         if (!braces) {
                             completion.insertText = propValueTemplate(propType.const.toString(), propType.type);
@@ -816,38 +634,47 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                     }
                 }
 
-                var ref = before.match(/&([\w\-]*)$/);
+                let ref = before.match(/&([\w\-]*)$/);
                 if (ref) {
                     return labelItems(false);
                 }
 
                 if (property[1].name === 'compatible') {
-                    return Object.keys(this.types.types).filter(t => !t.startsWith('/')).map(t => {
-                        var completion = new vscode.CompletionItem(t, vscode.CompletionItemKind.EnumMember);
-                        completion.range = range;
-                        if (!braces) {
-                            completion.insertText = propValueTemplate(t, 'string');
-                        }
-                        if (this.types.types[t]?.loaded) {
-                            completion.detail = this.types.types[t].title;
-                            completion.documentation = this.types.types[t].description;
-                        }
-                        return completion;
-                    })
+                    return Object.keys(this.types.types).filter(t => !t.startsWith('/')).map(typename => this.types.types[typename].map(type => {
+                            const completion = new vscode.CompletionItem(typename, vscode.CompletionItemKind.EnumMember);
+                            completion.range = range;
+                            if (!braces) {
+                                completion.insertText = propValueTemplate(typename, 'string');
+                            }
+
+                            if (type.loaded) {
+                                completion.detail = type.title;
+                                completion.documentation = type.description;
+                            }
+                            return completion;
+                        })
+                    ).reduce((all, types) => {
+                        all.push(...types);
+                        return all;
+                    }, []);
                 }
             }
         }
 
-        var nodeProps = node.properties();
+        if (before.match(/&[\w-]*$/)) {
+            return labelItems(true);
+        }
 
-        var props = type.properties;
+        let nodeProps = node.properties();
+
+        let props = type.properties;
         if (!document.getWordRangeAtPosition(position)) {
             props = props.filter(p => (p.name !== '#size-cells') && (p.name !== '#address-cells') && p.isLoaded && !nodeProps.find(pp => pp.name === p.name));
         }
 
-        var propCompletions = props
+        let propCompletions = props
             .map(p => {
-                var completion = new vscode.CompletionItem(p.name, vscode.CompletionItemKind.Property);
+                let completion = new vscode.CompletionItem(p.name, vscode.CompletionItemKind.Property);
                 completion.detail = Array.isArray(p.type) ? p.type[0] : p.type;
                 completion.documentation = p.description;
                 if (p.name === 'compatible') {
@@ -855,15 +682,15 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                 }
 
                 completion.insertText = new vscode.SnippetString();
-                appendPropSnippet(p, completion.insertText, node.parent, parentType, node);
+                appendPropSnippet(p, completion.insertText, node);
                 return completion;
             });
 
-        var nodes: types.NodeType[] = [];
+        let nodes: types.NodeType[] = [];
         if (type['child-bus']) {
-            nodes = Object.keys(this.types.types)
-                .map(t => this.types.types[t])
-                .filter(n => n.name !== '/')
+            nodes = Object.values(this.types.types)
+                .filter(n => n[0].name !== '/')
+                .reduce((all, n) => [...all, ...n], [])
                 .filter(n => n.loaded && n['parent-bus'] === type['child-bus']);
         }
 
@@ -873,14 +700,14 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             nodes.push(type['child-binding']);
         }
 
-        var anyNode = new vscode.CompletionItem('node', vscode.CompletionItemKind.Class);
+        let anyNode = new vscode.CompletionItem('node', vscode.CompletionItemKind.Class);
         anyNode.insertText = new vscode.SnippetString();
         anyNode.insertText.appendPlaceholder('node-name');
         if (type && type["child-binding"]) {
             anyNode.insertText.appendText(' {\n');
             type['child-binding'].properties.filter(p => p.required || p.name === 'status').forEach(p => {
                 (<vscode.SnippetString>anyNode.insertText).appendText(`\t`);
-                appendPropSnippet(p, <vscode.SnippetString>anyNode.insertText, node, type);
+                appendPropSnippet(p, <vscode.SnippetString>anyNode.insertText); // todo: This new node's parent is `node`, how to address?
                 (<vscode.SnippetString>anyNode.insertText).appendText(`\n`);
             });
 
@@ -896,16 +723,18 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         anyNode.insertText.appendText('\n};');
 
         // commands (/command/):
-        var commandStart = line.search(/\/(?:$|\w)/);
+        let commandStart = line.search(/\/(?:$|\w)/);
         if (commandStart >= 0) {
             var commandRange = new vscode.Range(new vscode.Position(position.line, commandStart), new vscode.Position(position.line, position.character-1));
         }
 
-        var deleteNode = new vscode.CompletionItem('/delete-node/', vscode.CompletionItemKind.Function);
+        let deleteNode = new vscode.CompletionItem('/delete-node/', vscode.CompletionItemKind.Function);
         deleteNode.range = commandRange;
+        deleteNode.sortText = `~~${deleteNode.label}`;
 
-        var deleteProp = new vscode.CompletionItem('/delete-property/', vscode.CompletionItemKind.Function);
+        let deleteProp = new vscode.CompletionItem('/delete-property/', vscode.CompletionItemKind.Function);
         deleteProp.range = commandRange;
+        deleteProp.sortText = `~~${deleteProp.label}`;
 
         return [
             ...propCompletions,
@@ -913,7 +742,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             deleteNode,
             deleteProp,
             ...nodes.map(n => {
-                var completion = new vscode.CompletionItem(n.name, vscode.CompletionItemKind.Class);
+                let completion = new vscode.CompletionItem(n.name, vscode.CompletionItemKind.Class);
                 completion.insertText = new vscode.SnippetString();
                 completion.insertText.appendPlaceholder('node-name');
                 completion.insertText.appendText(` {\n\tcompatible = "${n.name}";\n\t`);
@@ -923,16 +752,17 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                 completion.detail = n.title;
                 return completion;
             }),
+            ...macros,
         ];
     }
 
     provideSignatureHelp(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.SignatureHelpContext): vscode.ProviderResult<vscode.SignatureHelp> {
-        var prop = this.parser.getPropertyAt(position, document);
+        var prop = this.parser.getPropertyAt(position, document.uri);
         if (!prop) {
             return;
         }
         var parentType = prop[0].parent && this.types.nodeType(prop[0].parent);
-        var nodeType = this.types.nodeType(prop[0], parentType);
+        var nodeType = this.types.nodeType(prop[0]);
         if (!nodeType) {
             return;
         }
@@ -1011,11 +841,11 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         }
         var params: string[];
 
-        var cells = getCells(prop[1].name, prop[0].parent);
+        var cells = dts.getCells(prop[1].name, prop[0].parent);
         if (cells) {
             params = cells;
         } else if (propType.type === 'phandle-array') {
-            var ref : parser.Node;
+            var ref : dts.Node;
             if (paramValues.length > 0 && prop[1].name.endsWith('s') && (ref = this.parser.getPHandleNode(paramValues[0].slice(1)))) {
                 // referenced node type should have a top level entry called {prop[0:-1]}-cells,
                 // e.g. if the property is 'pwms', the referenced type should have an entry 'pwm-cells' that's a list of the parameter names:
@@ -1124,12 +954,9 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
 
     provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.DocumentLink[]> {
-        return this.parser.state?.fileInclusions.filter(i => i.line.uri.fsPath === document.uri.fsPath).map(i => {
-            let file = i.line.raw.match(/".*?"|<.*?>/);
-
-            let range = new vscode.Range(i.line.number, file.index!, i.line.number, file.index! + file[0].length);
-            let link = new vscode.DocumentLink(range, i.file);
-            link.tooltip = i.file.fsPath;
+        return this.parser.ctx(document.uri)?.includes.filter(i => i.loc.uri.fsPath === document.uri.fsPath).map(i => {
+            let link = new vscode.DocumentLink(i.loc.range, i.dst);
+            link.tooltip = i.dst.fsPath;
             return link;
         }) ?? [];
     }

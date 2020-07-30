@@ -1,9 +1,10 @@
 import * as yaml from 'js-yaml';
 import * as glob from 'glob';
 import * as vscode from 'vscode';
-import { readFileSync, fstat } from 'fs';
-import { Node, Property, ParserState } from './parser';
-import { Diagnostic, DiagnosticSeverity } from 'vscode';
+import * as path from 'path';
+import { readFileSync } from 'fs';
+import { Node } from './dts';
+import { DiagnosticsSet } from './diags';
 
 export type PropertyTypeString = 'string' | 'int' | 'boolean' | 'array' | 'compound' | 'phandle' | 'string-array' | 'phandle-array' | 'uint8-array';
 
@@ -28,8 +29,8 @@ export interface NodeType {
     title?: string;
     include?: string | string[];
     description?: string;
-    'child-bus'?: string;
-    'parent-bus'?: string;
+    'bus'?: string;
+    'on-bus'?: string;
     'child-binding'?: NodeType;
 };
 
@@ -90,7 +91,7 @@ const standardProperties: PropertyType[] = [
         'is calculated by using following formula: “registers address” << reg-shift. If unspecified, the default\n' +
         'value is 0.\n' +
         'For example, in a system where 16540 UART registers are located at addresses 0x0, 0x4, 0x8, 0xC,\n' +
-        '0x10, 0x14, 0x18, and 0x1C, a reg-shift = <2> property would be used to specify register\n' +
+        '0x10, 0x14, 0x18, and 0x1C, a reg-shift = \<2\> property would be used to specify register\n' +
         'locations.`\n',
     },
     {
@@ -108,8 +109,8 @@ const standardProperties: PropertyType[] = [
         'a different meaning on some bus types. Addresses in the address space defined by the root node are CPU real\n' +
         'addresses.\n' +
         '\n' +
-        'The value is a <prop-encoded-array>, composed of an arbitrary number of pairs of address and length,\n' +
-        '<address length>. The number of <u32> cells required to specify the address and length are bus-specific\n' +
+        'The value is a \\<prop-encoded-array\\>, composed of an arbitrary number of pairs of address and length,\n' +
+        '\\<address length\\>. The number of \\<u32\\> cells required to specify the address and length are bus-specific\n' +
         'and are specified by the #address-cells and #size-cells properties in the parent of the device node. If the parent\n' +
         'node specifies a value of 0 for #size-cells, the length field in the value of reg shall be omitted.\n',
     }
@@ -152,8 +153,14 @@ const interruptController: PropertyType[] = [
     },
 ];
 
-function typeNameFromFilename(filename: string) {
-    return filename.replace(/.*\//, '').replace('.yaml', '');
+function typeNameFromFile(filename: string) {
+    const text = readFileSync(filename, 'utf-8');
+    const compatible =  text.match(/^\s*compatible\s*:\s*"(.*?)"/m);
+    if (compatible) {
+        return compatible[1];
+    }
+
+    return path.basename(filename, '.yaml');
 }
 
 function mergeProperties(base: PropertyType[], inherited: PropertyType[]): PropertyType[] {
@@ -182,8 +189,8 @@ function filterDuplicateProps(props: PropertyType[]): PropertyType[] {
 }
 
 export class TypeLoader {
-    types: {[name: string]: NodeType} = {
-        '/': {
+    types: {[name: string]: NodeType[]} = {
+        '/': [{
             name: '/',
             filename: '',
             loaded: true,
@@ -212,8 +219,8 @@ export class TypeLoader {
                 },
             ],
             title: 'Root node'
-        },
-        'simple-bus': {
+        }],
+        'simple-bus': [{
             name: 'simple-bus',
             filename: '',
             loaded: true,
@@ -250,8 +257,8 @@ export class TypeLoader {
                     required: true
                 }
             ]
-        },
-        '/cpus/': {
+        }],
+        '/cpus/': [{
             name: '/cpus/',
             filename: '',
             title: '/cpus',
@@ -268,8 +275,8 @@ export class TypeLoader {
                     required: true,
                 }
             ]
-        },
-        '/cpus/cpu': {
+        }],
+        '/cpus/cpu': [{
             name: '/cpus/cpu',
             filename: '',
             title: 'CPU instance',
@@ -301,8 +308,8 @@ export class TypeLoader {
                     required: true
                 }
             ]
-        },
-        '/chosen/': {
+        }],
+        '/chosen/': [{
             name: '/chosen/',
             title: '/Chosen node',
             filename: '',
@@ -364,37 +371,42 @@ export class TypeLoader {
                     description: 'Generates symbol DT_UART_MCUMGR_ON_DEV_NAME'
                 },
             ]
-        },
-        '/aliases/': {
+        }],
+        '/aliases/': [{
             name: '/aliases/',
             filename: '',
             loaded: true,
             title: 'Aliases',
             description: `A devicetree may have an aliases node (/aliases) that defines one or more alias properties. The alias node shall be at the root of the devicetree and have the node name /aliases. Each property of the /aliases node defines an alias. The property name specifies the alias name. The property value specifies the full path to a node in the devicetree. For example, the property serial0 = "/simple-bus@fe000000/ serial@llc500" defines the alias serial0. Alias names shall be a lowercase text strings of 1 to 31 characters from the following set of characters.\n\nAn alias value is a device path and is encoded as a string. The value represents the full path to a node, but the path does not need to refer to a leaf node. A client program may use an alias property name to refer to a full device path as all or part of its string value. A client program, when considering a string as a device path, shall detect and use the alias.`,
             properties: []
-        }
+        }],
     };
     folders: string[] = []
+    diags: DiagnosticsSet;
+
+    constructor() {
+        this.diags = new DiagnosticsSet();
+    }
 
     addFolder(folder: string) {
         this.folders.push(folder);
         var files = glob.sync('**/*.yaml', { cwd: folder });
         files.forEach(f => {
-            var name = typeNameFromFilename(f);
+            const name = typeNameFromFile(path.resolve(folder, f));
             if (!(name in this.types)) {
-                this.types[name] = { name: name, properties: [ ...standardProperties ], loaded: false, filename: folder + '/' + f };
+                this.types[name] = [];
             }
+
+            this.types[name].push({ name: name, properties: [...standardProperties], loaded: false, filename: folder + '/' + f });
         });
     }
 
-    get(name: string): NodeType | undefined {
+    get(name: string): NodeType[] {
         if (!(name in this.types)) {
-            return undefined;
+            return [];
         }
 
-        if (!this.types[name]?.loaded) {
-            this.types[name] = this.loadYAML(name);
-        }
+        this.types[name].filter(t => !t.loaded).forEach((_, i) => this.types[name][i] = this.loadYAML(this.types[name][i]));
 
         return this.types[name];
     }
@@ -409,22 +421,24 @@ export class TypeLoader {
             type.properties = mergeProperties(type.properties, baseType.properties);
         }
 
+        if ('compatible' in tree) {
+            type.name = tree['compatible'];
+        }
+
         if ('include' in tree) {
-            if (typeof type.include === 'string') {
-                var include = this.get(typeNameFromFilename(tree.include));
-                if (include) {
-                    type.properties = mergeProperties(type.properties, include.properties);
+            const addInclude = (include: string) => {
+                this.get(path.basename(include, '.yaml')).forEach(i => {
+                    type.properties = mergeProperties(type.properties, i.properties);
                     // load all included tree entries that aren't in the child:
-                    var entries = Object.keys(include).filter(e => e !== 'properties' && !(e in type));
-                    entries.forEach(e => type[e] = include[e]);
-                }
-            } else {
-                type.include.forEach(i => {
-                    var include = this.get(typeNameFromFilename(i));
-                    if (include) {
-                        type.properties = mergeProperties(type.properties, include.properties);
-                    }
+                    var entries = Object.keys(i).filter(e => e !== 'properties' && !(e in type));
+                    entries.forEach(e => type[e] = i[e]);
                 });
+            };
+
+            if (typeof type.include === 'string') {
+                addInclude(tree.include);
+            } else {
+                type.include.forEach(addInclude);
             }
         }
 
@@ -437,24 +451,22 @@ export class TypeLoader {
         return type;
     }
 
-    loadYAML(name: string): NodeType | null {
-        var type = this.types[name];
-        if (!type) {
-            return null;
-        }
-
-        var contents = readFileSync(type.filename, 'utf-8');
+    private loadYAML(type: NodeType): NodeType {
         try {
+            var contents = readFileSync(type.filename, 'utf-8');
             var tree = yaml.load(contents);
             // var tree = yaml.parse(contents, {mapAsMap: true});
-            return this.YAMLtoNode(tree, type);
+            type = this.YAMLtoNode(tree, type);
         } catch (e) {
-            vscode.window.showWarningMessage(`Invalid type file "${name}.yaml": ${e}`);
+            vscode.window.showWarningMessage(`Error resolving type "${type.name}": ${e}`);
+            type.loaded = true;
         }
+
+        return type;
     }
 
 
-    nodeType(node: Node, parentType?: NodeType, parser?: ParserState): NodeType {
+    nodeType(node: Node): NodeType {
         var props = node.properties();
 
         var getBaseType = () => {
@@ -473,49 +485,48 @@ export class TypeLoader {
                     compatible = compatibleProp.value.actual as string[];
                 } else {
                     compatible = [];
-                    parser?.pushDiag(`Property compatible must be a string or an array of strings`, DiagnosticSeverity.Warning, compatibleProp.loc);
+                    this.diags.push(compatibleProp.loc.uri, new vscode.Diagnostic(compatibleProp.loc.range, `Property compatible must be a string or an array of strings`));
                 }
 
-                compatible.forEach(c => {
-                    candidates.push(c);
-                    // Some types are named "binding-bus", like bosch,bme280-i2c:
-                    if (parentType && parentType['child-bus']) {
-                        candidates.push(`${c}-${parentType['child-bus']}`);
-                    }
-                })
+                candidates.push(...compatible);
             }
 
             candidates.push(node.name);
             candidates.push(node.name.replace(/s$/, ''));
 
-            let type: NodeType;
-            if (candidates.some(c => (type = this.get(c)))) {
-                return type;
+            let types: NodeType[];
+            if (candidates.some(c => (types = this.get(c)).length)) {
+                return types;
             }
 
-            if (parentType && parentType['child-binding']) {
-                return parentType['child-binding'];
+            if (node.parent?.type?.['child-binding']) {
+                return [node.parent.type['child-binding']];
             }
 
-            node.entries.forEach(e => parser?.pushDiag(`Unknown type. Missing "compatible" property`, DiagnosticSeverity.Warning, e.nameLoc));
+            node.entries.forEach(e => this.diags.push(e.nameLoc.uri, new vscode.Diagnostic(e.nameLoc.range, `Unknown type. Missing "compatible" property`)));
+            return [];
         };
 
-        var type = getBaseType();
+        let types = getBaseType();
 
-        if (!type) {
-            type = { name: '<unknown>', filename: '', loaded: true, properties: [ ...standardProperties ] };
+        if (!types.length) {
+            types = [{ name: '<unknown>', filename: '', loaded: true, properties: [ ...standardProperties ] }];
         }
 
         if (props.find(p => p.name === 'interrupt-controller')) {
-            type.properties = mergeProperties(type.properties, interruptController);
+            types.forEach(t => t.properties = mergeProperties(t.properties, interruptController));
         }
 
         if (props.find(p => p.name === 'interrupt-parent')) {
-            type.properties = mergeProperties(type.properties, interruptNode);
+            types.forEach(t => t.properties = mergeProperties(t.properties, interruptNode));
         }
 
-        type.properties = filterDuplicateProps(type.properties);
+        types.forEach(t => t.properties = filterDuplicateProps(t.properties));
 
-        return type;
+        if (node.parent?.type && types.length > 1) {
+            return types.find(t => node.parent.type["bus"] === t["on-bus"]) ?? types[0];
+        }
+
+        return types[0];
     }
 }

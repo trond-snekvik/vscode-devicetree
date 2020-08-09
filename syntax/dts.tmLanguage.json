@@ -4,6 +4,7 @@
         {"include": "#comment"},
         {"include": "#block-comment"},
         {"include": "#preprocessor-include"},
+        {"include": "#preprocessor-define"},
         {"include": "#preprocessor"},
         {"include": "#compiler-directive"},
         {"include": "#root-node"},
@@ -19,17 +20,36 @@
                 "2": {"name": "meta.preprocessor.include.c"}
             }
         },
-        "preprocessor": {
-            "begin": "^\\s*#\\w+",
-            "name": "keyword.control.preprocessor",
+        "preprocessor-define": {
+            "begin": "^\\s*(#\\s*define)\\s+(\\w+)(\\(.*?\\))?",
+            "beginCaptures": {
+                "1": { "name": "keyword.control.preprocessor" },
+                "2": { "name": "entity.name.function.preprocessor" },
+                "3": { "name": "entity.name.function.preprocessor" }
+            },
+            "name": "entity.name.function.preprocessor",
             "end": "(?<!\\\\)\\n",
             "patterns": [
                 {"include": "#string"},
                 {"include": "#comment"},
                 {"include": "#block-comment"},
                 {"include": "#number"},
-                {"include": "#expression"},
-                {"match": "\\w+", "name": "entity.name.function.preprocessor"}
+                {"include": "#expression"}
+            ]
+        },
+        "preprocessor": {
+            "begin": "^\\s*#\\s*\\w+",
+            "beginCaptures": {
+                "0": { "name": "keyword.control.preprocessor" }
+            },
+            "name": "entity.name.function.preprocessor",
+            "end": "(?<!\\\\)\\n",
+            "patterns": [
+                {"include": "#string"},
+                {"include": "#comment"},
+                {"include": "#block-comment"},
+                {"include": "#number"},
+                {"include": "#expression"}
             ]
         },
         "root-node": {

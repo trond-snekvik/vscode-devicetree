@@ -1,16 +1,239 @@
 import * as vscode from 'vscode';
 import { MacroInstance, Macro, preprocess, IncludeStatement } from './preprocessor';
 import { DiagnosticsSet } from './diags';
-import { start } from 'repl';
 import { NodeType, TypeLoader } from './types';
-import { resolve } from 'url';
 
-type PHandle = {node: string};
-type _PHandleArray = (string | number)[];
-type PHandleArray = _PHandleArray | _PHandleArray[];
-type _PropertyValue = string | number | boolean | PHandle | PHandle[] | PHandleArray[] | number[];
 export type DiagCollection = {uri: vscode.Uri, diags: vscode.Diagnostic[]};
-export type PropertyValue = _PropertyValue | _PropertyValue[]; // composite
+// export type PropertyValue = _PropertyValue | _PropertyValue[]; // composite
+
+abstract class PropertyValue {
+    val: any;
+    loc: vscode.Location;
+
+    constructor(val: any, loc: vscode.Location) {
+        this.val = val;
+        this.loc = loc;
+    }
+
+    toString() {
+        return this.val.toString();
+    }
+}
+
+export class StringValue extends PropertyValue {
+    val: string;
+
+    constructor(val: string, loc: vscode.Location) {
+        super(val, loc);
+    }
+
+    static match(state: ParserState): StringValue {
+        let string = state.match(/^"(.*?)"/);
+        if (string) {
+            return new StringValue(string[1], state.location());
+        }
+    }
+
+    toString() {
+        return `"${this.val}"`;
+    }
+}
+
+export class BoolValue extends PropertyValue {
+    val: boolean;
+
+    constructor(loc: vscode.Location) {
+        super(true, loc);
+    }
+}
+
+export class IntValue extends PropertyValue {
+    val: number;
+    hex: boolean;
+
+    protected constructor(val: number, loc: vscode.Location, hex=false) {
+        super(val, loc);
+        this.hex = hex;
+    }
+
+    static match(state: ParserState): IntValue {
+        let number = state.match(/^(0x[\da-fA-F]+|\d+)\b/);
+        if (number) {
+            return new IntValue(Number.parseInt(number[1]), state.location(), number[1].startsWith('0x'));
+        }
+    }
+
+    toString() {
+        if (this.hex) {
+            return `< 0x${this.val.toString(16)} >`;
+        }
+
+        return `< ${this.val} >`
+    }
+}
+
+export class Expression extends IntValue {
+    raw: string;
+
+    private constructor(raw: string, loc: vscode.Location) {
+        super(eval(raw), loc);
+        this.raw = raw;
+    }
+
+    static match(state: ParserState): Expression {
+        let start = state.freeze();
+        let m = state.match(/^\(/);
+        if (!m) {
+            return undefined;
+        }
+
+        let level = 1;
+        let text = '(';
+        while (level !== 0) {
+            m = state.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+\-\/*]|\s*|0x[\da-fA-F]+|[\d\.]+)\s*)*([()])/);
+            if (!m) {
+                state.pushDiag(`Unterminated expression`);
+                break;
+            }
+            text += m[0];
+            if (m[1] === '(') {
+                level++;
+            } else {
+                level--;
+            }
+        }
+
+        let loc = state.location(start);
+
+        try {
+            return new Expression(text, loc);
+        } catch (e) {
+            state.pushDiag(`Unable to evaluate expression`, vscode.DiagnosticSeverity.Error, loc);
+        }
+    }
+
+    toString(raw=true) {
+        if (raw) {
+            return this.raw;
+        }
+
+        return `< ${this.val} >`;
+    }
+}
+
+export class ArrayValue extends PropertyValue {
+    val: (PHandle | IntValue)[];
+    private constructor(value: (PHandle | IntValue)[], loc: vscode.Location) {
+        super(value, loc);
+    }
+
+    static match(state: ParserState): ArrayValue {
+        let start = state.freeze();
+        let phandleArray = state.match(/^</);
+        if (!phandleArray) {
+            return undefined;
+        }
+
+        const elems = [IntValue, PHandle, Expression];
+        let values: (PHandle | IntValue)[] = [];
+
+        while (state.skipWhitespace() && !state.match(/^>/)) {
+            var match: PHandle | IntValue | Expression | undefined;
+            elems.find(e => match = e.match(state));
+            if (match) {
+                values.push(match);
+                continue;
+            }
+
+            let unexpectedToken = state.skipToken();
+            if (unexpectedToken.match(/[;,]/)) {
+                state.pushDiag(`Unterminated expression`, vscode.DiagnosticSeverity.Error, state.location(start));
+                break;
+            }
+
+            state.pushDiag(`Unexpected token`, vscode.DiagnosticSeverity.Error);
+        }
+
+        return new ArrayValue(values, state.location(start));
+    }
+
+    get length() {
+        return this.val.length;
+    }
+
+    get forEach() {
+        return this.val.forEach;
+    }
+
+    get find() {
+        return this.val.find;
+    }
+
+    get every() {
+        return this.val.every;
+    }
+
+    isNumberArray() {
+        return this.val.every(v => v instanceof IntValue);
+    }
+
+    isNumber() {
+        return (this.val.length === 1) && (this.val[0] instanceof IntValue);
+    }
+
+    isPHandle() {
+        return (this.val.length === 1) && (this.val[0] instanceof IntValue);
+    }
+
+    isPHandleArray() {
+        return this.val.every(v => v instanceof PHandle);
+    }
+
+    toString() {
+        return `< ${this.val.map(v => v.toString())} >`;
+    }
+}
+
+export class BytestringValue extends PropertyValue {
+    val: number[];
+    private constructor(value: number[], loc: vscode.Location) {
+        super(value, loc);
+    }
+
+    get length() {
+        return this.val.length;
+    }
+
+    static match(state: ParserState): BytestringValue {
+        let byteArray = state.match(/^\[\s*((?:[\da-fA-F]{2}\s*)+)\]/);
+        if (byteArray) {
+            return new BytestringValue((byteArray[1] as string).match(/\S{2}/g).map(c => parseInt(c, 16)), state.location());
+        }
+    }
+
+    toString() {
+        return `[ ${this.val.map(v => v.toString(16)).join(' ')} ]`;
+    }
+}
+
+export class PHandle extends PropertyValue {
+    val: string;
+
+    private constructor(value: string, loc: vscode.Location) {
+        super(value, loc);
+    }
+
+    static match(state: ParserState): PHandle {
+        let phandle = state.match(/^&([\w\-]+)/);
+        if (phandle) {
+            return new PHandle(phandle[1], state.location());
+        }
+    }
+
+    toString() {
+        return `$${this.val}`;
+    }
+}
 
 export function evaluateExpr(expr: string, start: vscode.Position, diags: vscode.Diagnostic[]) {
     expr = expr.trim().replace(/([\d\.]+|0x[\da-f]+)[ULf]+/gi, '$1');
@@ -113,23 +336,35 @@ class ParserState {
         return this.lines[0];
     }
 
-    location() {
-        let start: number;
+    location(start?: Offset) {
+        let begin: number;
         let end: number;
-        let line = this.getPrevMatchLine();
+        let endLine = this.getPrevMatchLine();
+        let startLine = endLine;
+        if (start) {
+            startLine = this.lines[start.line];
+            // Can't range across multiple files, revert to the prevMatch to get at least a partially correct result:
+            if (startLine.uri.toString() !== endLine.uri.toString()) {
+                startLine = endLine;
+            }
+        }
 
         if (this.offset.col) {
-            start = this.offset.col - this.prevMatch.length;
+            begin = this.offset.col - this.prevMatch.length;
             end = this.offset.col;
         } else if (this.offset.line >= 1) {
-            start = this.lines[this.offset.line - 1].length - this.prevMatch.length;
+            begin = this.lines[this.offset.line - 1].length - this.prevMatch.length;
             end = this.lines[this.offset.line - 1].length;
         } else {
-            start = 0;
+            begin = 0;
             end = this.lines[0].length;
         }
 
-        return new vscode.Location(line.uri, line.remap(new vscode.Range(line.number, start, line.number, end)));
+        if (start) {
+            begin = start.col;
+        }
+
+        return new vscode.Location(endLine.uri, new vscode.Range(startLine.number, begin, endLine.number, end));
     }
 
     pushDiag(message: string, severity: vscode.DiagnosticSeverity=vscode.DiagnosticSeverity.Error, loc?: vscode.Location): vscode.Diagnostic {
@@ -248,7 +483,9 @@ class ParserState {
 }
 
 function parsePropValue(state: ParserState) {
-    let elems: _PropertyValue[] = [];
+    let elems: PropertyValue[] = [];
+
+    const valueTypes = [ArrayValue, StringValue, BytestringValue, PHandle];
 
     while (state.skipWhitespace()) {
         if (state.peek(/^;/)) {
@@ -263,105 +500,10 @@ function parsePropValue(state: ParserState) {
             state.skipWhitespace();
         }
 
-        let phandle = state.match(/^<\s*&([\w\-]+)\s*>/);
-        if (phandle) {
-            elems.push(<PHandle>{node: phandle[1]});
-            continue;
-        }
-
-        let reference = state.match(/^&([\w\-]+)/);
-        if (reference) {
-            elems.push(<PHandle>{node: reference[1]});
-            continue;
-        }
-
-        let string = state.match(/^"(.*?)"/);
-        if (string) {
-            elems.push(string[1]);
-            continue;
-        }
-
-        let number = state.match(/^<\s*(\d+|0x[\da-fA-F]+)\s*>/);
-        if (number) {
-            elems.push(parseInt(number[1]));
-            continue;
-        }
-
-        let numberArray = state.match(/^<\s*((?:(?:\d+|0x[\da-fA-F]+)\s+)*(?:\d+|0x[\da-fA-F]+))\s*>/);
-        if (numberArray) {
-            let parts = (numberArray[1] as string).split(/\s+/);
-            elems.push(parts.map(p => parseInt(p)));
-            continue;
-        }
-
-        let phandles = state.match(/^<\s*((?:&[\w\-]+\s+)+&[\w\-]+)\s*>/);
-        if (phandles) {
-            elems.push((phandles[1] as string).split(/\s+/).map(h => { return <PHandle>{ node: h.slice(1) }; }));
-            continue;
-        }
-
-        let phandleArray = state.match(/^</);
-        if (phandleArray) {
-            let values: _PHandleArray = [];
-            while (state.skipWhitespace()) {
-                let m = state.match(/^(0x[\da-fA-F]+|\d+)/);
-                if (m) {
-                    values.push(parseInt(m[0] as string));
-                    continue;
-                }
-
-                m = state.match(/^&[\w\-]+/);
-                if (m) {
-                    values.push(m[0]);
-                    continue;
-                }
-
-                m = state.match(/^\(/);
-                if (m) {
-                    let level = 1;
-                    let text = '(';
-                    while (level !== 0) {
-                        m = state.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+\-\/*]|\s*|0x[\da-fA-F]+|[\d\.]+)\s*)*([()])/);
-                        if (!m) {
-                            state.pushDiag(`Unterminated expression`);
-                            break;
-                        }
-                        text += m[0];
-                        if (m[1] === '(') {
-                            level++;
-                        } else {
-                            level--;
-                        }
-                    }
-                    try {
-                        let num = eval(text) as number | undefined;
-                        if (num !== undefined) {
-                            values.push(num);
-                        }
-                    } catch (e) {
-                        state.pushDiag(`Unable to evaluate expression`);
-                    }
-                    continue;
-                }
-
-                m = state.match(/^>/);
-                if (m) {
-                    break;
-                }
-
-                let unexpectedToken = state.skipToken();
-                state.pushDiag(`Unexpected token`);
-                if (unexpectedToken === ';') {
-                    break;
-                }
-            }
-            elems.push(values as _PropertyValue);
-            continue;
-        }
-
-        let byteArray = state.match(/^\[\s*((?:[\da-fA-F]{2}\s*)+)\]/);
-        if (byteArray) {
-            elems.push((byteArray[1] as string).match(/\S{2}/).map(c => parseInt(c, 16)));
+        var match: PropertyValue;
+        valueTypes.find(type => match = type.match(state));
+        if (match) {
+            elems.push(match);
             continue;
         }
 
@@ -373,12 +515,8 @@ function parsePropValue(state: ParserState) {
         state.pushDiag(`Unexpected token in property value`);
     }
 
-    if (elems.length === 1) {
-        return elems[0];
-    }
-
     if (elems.length === 0) {
-        return true;
+        return [new BoolValue(state.location())];
     }
 
     return elems;
@@ -387,37 +525,102 @@ function parsePropValue(state: ParserState) {
 export class Property {
     name: string;
     labels?: string[];
-    value: {actual: PropertyValue, raw: string};
+    value: PropertyValue[];
     loc: vscode.Location;
     fullRange: vscode.Range;
 
-    constructor(name: string, loc: vscode.Location, state?: ParserState, labels?: string[]) {
+    constructor(name: string, loc: vscode.Location, state: ParserState, labels?: string[]) {
         this.name = name;
         this.loc = loc;
         this.labels = labels;
-
-        if (state) {
-            state.skipWhitespace();
-            let start = state.freeze();
-            let value = parsePropValue(state);
-            this.value = { actual: value, raw: state.since(start) };
-            this.fullRange = new vscode.Range(loc.range.start, state.location().range.end);
-        } else {
-            this.value = { actual: true, raw: '' };
-            this.fullRange = loc.range;
-        }
+        this.value = parsePropValue(state);
+        this.fullRange = new vscode.Range(loc.range.start, state.location().range.end);
     }
 
     toString(): string {
-        if (this.value === undefined) {
-            return `${this.name} = ?`;
-        }
-
-        if (this.value.actual === true) {
+        if (this.value.length === 1 && this.value[0] instanceof BoolValue) {
             return `${this.name}`
         }
 
-        return `${this.name} = ${this.value.raw}`;
+        return `${this.name} = ${this.valueString()}`;
+    }
+
+    valueString(): string {
+        if (this.value === undefined) {
+            return '?';
+        }
+
+        if (this.value.length === 1 && this.value[0] instanceof BoolValue) {
+            return 'true';
+        }
+
+        return this.value.map(v => v.val).join(', ');
+    }
+
+    type(): string {
+        if (this.value.length === 1) {
+            let v = this.value[0]
+            if (v instanceof ArrayValue) {
+                if (v.length === 1) {
+                    if (v.val[0] instanceof IntValue) {
+                        return 'int';
+                    }
+
+                    if (v.val[0] instanceof PHandle) {
+                        return 'phandle';
+                    }
+
+                    return 'invalid';
+                }
+
+                if (v.every(e => e instanceof PHandle)) {
+                    return 'phandles';
+                }
+
+                if (v.every(e => e instanceof IntValue)) {
+                    return 'array';
+                }
+
+                return 'phandle-array';
+            }
+
+            if (v instanceof StringValue) {
+                return 'string';
+            }
+
+            if (v instanceof BytestringValue) {
+                return 'uint8-array';
+            }
+
+            if (v instanceof BoolValue) {
+                return 'boolean';
+            }
+
+            if (v instanceof PHandle) {
+                return 'path';
+            }
+
+            return 'invalid';
+        }
+
+        if (this.value.every(v => v instanceof ArrayValue)) {
+
+            if (this.value.every((v: ArrayValue) => v.every(e => e instanceof PHandle))) {
+                return 'phandles';
+            }
+
+            if (this.value.every((v: ArrayValue) => v.every(e => e instanceof IntValue))) {
+                return 'array';
+            }
+
+            return 'phandle-array';
+        }
+
+        if (this.value.every(v => v instanceof StringValue)) {
+            return 'string-array';
+        }
+
+        return 'compound';
     }
 };
 
@@ -544,7 +747,7 @@ export class Node {
 
     enabled(): boolean {
         let status = this.property('status');
-        return !status || (status.value.actual === 'okay');
+        return !status || (status.value[0].val === 'okay');
     }
 
     hasLabel(label: string) {
@@ -986,7 +1189,7 @@ export class Parser {
 
     getPHandleNode(handle: number | string): Node {
         if (typeof handle === 'number') {
-            return this.nodeArray().find(n => n.properties().find(p => p.name === 'phandle' && p.value.actual === handle));
+            return this.nodeArray().find(n => n.properties().find(p => p.name === 'phandle' && p.value[0].val === handle));
         } else if (typeof handle === 'string') {
             return this.nodeArray().find(n => n.labels().find(p => p === handle));
         }
@@ -997,7 +1200,7 @@ export function getCells(propName: string, parent?: Node): string[] | undefined 
     let cellProp = getPHandleCells(propName, parent);
 
     if (cellProp) {
-        return ['label'].concat(Array(<number> cellProp.value.actual).fill('cell'));
+        return ['label'].concat(Array(<number> cellProp.value[0].val).fill('cell'));
     }
 
     if (propName === 'reg') {
@@ -1008,12 +1211,12 @@ export function getCells(propName: string, parent?: Node): string[] | undefined 
 
             let addrCellsProp = parentProps.find(p => p.name === '#address-cells');
             if (addrCellsProp) {
-                addrCells = addrCellsProp.value.actual as number;
+                addrCells = addrCellsProp.value[0].val as number;
             }
 
             let sizeCellsProp = parentProps.find(p => p.name === '#size-cells');
             if (sizeCellsProp) {
-                sizeCells = sizeCellsProp.value.actual as number;
+                sizeCells = sizeCellsProp.value[0].val as number;
             }
         }
         return Array(addrCells).fill('addr').concat(Array(sizeCells).fill('size'));

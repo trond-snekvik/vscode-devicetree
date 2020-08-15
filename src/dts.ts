@@ -557,6 +557,54 @@ export class Property {
         return this.value.map(v => v.val).join(', ');
     }
 
+    get number() {
+        if (this.value.length === 1 && (this.value[0] instanceof ArrayValue) && this.value[0].val.length === 1 && (this.value[0].val[0] instanceof IntValue)) {
+            return this.value[0].val[0].val as number;
+        }
+    }
+
+    get string() {
+        if (this.value.length === 1 && (this.value[0] instanceof StringValue)) {
+            return this.value[0].val as string;
+        }
+    }
+
+    get pHandle() {
+        if (this.value.length === 1 && (this.value[0] instanceof ArrayValue) && this.value[0].val.length === 1 && (this.value[0].val[0] instanceof PHandle)) {
+            return this.value[0].val[0] as PHandle;
+        }
+    }
+
+    get bytestring() {
+        if (this.value.length === 1 && (this.value[0] instanceof BytestringValue)) {
+            return this.value[0] as BytestringValue;
+        }
+    }
+
+    get array() {
+        if (this.value.length === 1 && (this.value[0] instanceof ArrayValue) && this.value[0].val.every(v => v instanceof IntValue)) {
+            return this.value[0].val.map(v => v.val) as number[];
+        }
+    }
+
+    get pHandles() {
+        if (this.value.length === 1 && (this.value[0] instanceof ArrayValue) && this.value[0].val.every(v => v instanceof PHandle)) {
+            return this.value[0].val as PHandle[];
+        }
+    }
+
+    get pHandleArray() {
+        if (this.value.every(v => v instanceof ArrayValue)) {
+            return this.value[0].val as ArrayValue[];
+        }
+    }
+
+    get stringArray() {
+        if (this.value.every(v => v instanceof StringValue)) {
+            return this.value.map(v => v.val) as string[];
+        }
+    }
+
     type(): string {
         if (this.value.length === 1) {
             let v = this.value[0]
@@ -1223,8 +1271,8 @@ export function getCells(propName: string, parent?: Node): string[] | undefined 
     }
 }
 
-export function getPHandleCells(propname: string, parent?: Node): Property {
-    if (propname.endsWith('s') && parent) {
+export function getPHandleCells(propname: string, parent: Node): Property {
+    if (propname.endsWith('s')) {
         /* Weird rule: phandle array cell count is determined by the #XXX-cells entry in the parent,
          * where XXX is the singular version of the name of this property UNLESS the property is called XXX-gpios, in which
          * case the cell count is determined by the parent's #gpio-cells property

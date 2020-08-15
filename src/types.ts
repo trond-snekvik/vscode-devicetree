@@ -6,7 +6,6 @@ import { readFileSync } from 'fs';
 import { Node } from './dts';
 import { DiagnosticsSet } from './diags';
 
-export type PropertyTypeString = 'string' | 'int' | 'boolean' | 'array' | 'compound' | 'phandle' | 'string-array' | 'phandle-array' | 'uint8-array';
 
 export interface PropertyType {
     name: string;
@@ -14,7 +13,7 @@ export interface PropertyType {
     enum?: string[];
     const?: string | number;
     default?: any;
-    type: PropertyTypeString | PropertyTypeString[];
+    type: string | string[];
     description?: string;
     constraint?: string;
     isLoaded?: boolean;
@@ -478,17 +477,10 @@ export class TypeLoader {
 
             let compatibleProp = props.find(p => p.name === 'compatible');
             if (compatibleProp) {
-                let compatible: string[];
-                if (typeof compatibleProp.value.actual === 'string') {
-                    compatible = [compatibleProp.value.actual as string];
-                } else if (Array.isArray(compatibleProp.value.actual)) {
-                    compatible = compatibleProp.value.actual as string[];
-                } else {
-                    compatible = [];
-                    this.diags.push(compatibleProp.loc.uri, new vscode.Diagnostic(compatibleProp.loc.range, `Property compatible must be a string or an array of strings`));
+                let compatible = compatibleProp.stringArray;
+                if (compatible) {
+                    candidates.push(...compatible);
                 }
-
-                candidates.push(...compatible);
             }
 
             candidates.push(node.name);

@@ -1,64 +1,260 @@
 import * as vscode from 'vscode';
-import { Parser, getCells, getPHandleCells, NodeEntry } from './dts';
+import { Parser, getCells, getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, StringValue, BoolValue, BytestringValue } from './dts';
 import * as types from './types';
 import { DiagnosticsSet } from './diags';
-import { isArray } from 'util';
 
 export type LintCtx = { parser: Parser, types: types.TypeLoader, diags: DiagnosticsSet };
 
-function lintNode(entry: NodeEntry, ctx: LintCtx) {
-    var node = entry.node;
-    const props = node.properties();
+function lintNode(node: Node, ctx: LintCtx) {
+    let props = node.uniqueProperties();
+
+    props.forEach(prop => {
+        // special properties:
+        if (prop.name === 'reg') {
+            var cells = getCells(prop.name, node.parent);
+
+            if (cells && cells.length > 0) {
+                let v = prop.value[0];
+                if (!prop.array) {
+                    let diag = ctx.diags.pushLoc(prop.loc, 'reg property must be a number array (e.g. < 1 2 3 >)', vscode.DiagnosticSeverity.Error);
+                    if (v instanceof ArrayValue) {
+                        diag.relatedInformation = v.val.filter(e => !(e instanceof IntValue)).map(e => new vscode.DiagnosticRelatedInformation(e.loc, `${e.toString()} is a ${v.constructor.name}`));
+                    }
+                } else if (prop.array.length !== cells.length) {
+                    ctx.diags.pushLoc(prop.loc, `reg property must be on format < ${cells.join(' ')} >`, vscode.DiagnosticSeverity.Error);
+                } else if (cells[0] === 'addr' && Number.isInteger(node.address) && node.address !== v.val[0].val) {
+                    ctx.diags.pushLoc(v.val[0].loc, `Node address does not match address cell (expected 0x${node.address.toString(16)})`);
+                }
+            } else {
+                ctx.diags.pushLoc(prop.loc, `Unable to fetch addr and size count`, vscode.DiagnosticSeverity.Error);
+            }
+        } else if (prop.name === 'compatible') {
+            let nonStrings = prop.value.filter(v => !(v instanceof StringValue));
+            if (nonStrings.length > 0) {
+                let diag = ctx.diags.pushLoc(prop.loc, `All values in compatible property must be strings`, vscode.DiagnosticSeverity.Error);
+                diag.relatedInformation = nonStrings.map(v => new vscode.DiagnosticRelatedInformation(v.loc, `${v} is a ${v.constructor.name}`));
+            }
+
+            prop.value.filter(v => v instanceof StringValue).forEach((t: StringValue) => {
+                var type = ctx.types.get(t.val);
+                if (!type) {
+                    ctx.diags.pushLoc(t.loc, `Unknown node type ${t}`);
+                }
+            });
+        } else if (prop.name.endsWith('-map')) {
+            /* Nexus nodes have specifier maps (section 2.5.1 of the spec).
+             * These specifier maps are lists of translations to other entries.
+             * For instance, an alias for a gpio header with different pin numbers, can have a list of mappings from its own
+             * pins to another gpio header.
+             *
+             * Each entry in the map has three components:
+             * - Input cells: a list of number-cells matching the reference cells. These are matched against the input
+             *   parameters when this node is referenced, to figure out which entry to translate it to.
+             * - Output node: a PHandle pointing to the node we're mapping to
+             * - Output cells: The cell values to send to the referenced node.
+             *
+             * When doing lookup into the specifier map, we'll first apply a mask to the input cells ("<specifier>-map-mask" property),
+             * then run through every entry in the <specifier>-map to find matching input cells. When we find a matching entry, we'll translate
+             * the input to the output reference, and pass through cell values that match the <specifier>-map-pass-thru value.
+             *
+             * Example: a nexus node is named shield, and has these properties:
+             * #gpio-cells = < 2 >;
+             * gpio-map-mask = < 0xffffffff 0xfffffff0 >;
+             * gpio-map-pass-thru = < 0x00 0x0f >;
+             * gpio-map = < 0x00 0x10 &gpio0 0x15 0x10>, < 0x00 0x00 &gpio0 0x15 0x00>, < 0x01 0x00 &gpio0 0x03 0x00>;
+             *
+             * When we reference the nexus node and the gpio node, the following is equivalent:
+             * <&shield 0x00 0x10> and <&gpio0 0x15 0x10>
+             * <&shield 0x00 0x13> and <&gpio0 0x15 0x13>
+             * <&shield 0x00 0x08> and <&gpio0 0x15 0x08>
+             * <&shield 0x01 0x08> and <&gpio0 0x03 0x08>
+             * And the following produces an error, as the masked cell values can't be found in the map:
+             * <&shield 0x00 0x20>
+             * <&shield 0x01 0x10>
+             * <&shield 0x02 0x00>
+             */
+
+            // Validate nexus node format:
+            let specifier = prop.name.match(/^(.*)-map$/)[1];
+            let cells = props.find(p => p.name === `#${specifier}-cells`);
+            let mask = props.find(p => p.name === `${specifier}-map-mask`);
+            let passThru = props.find(p => p.name === `${specifier}-map-pass-thru`);
+
+            if (!cells || !(cells.value.length === 1 && (cells.value[0] as ArrayValue).isNumber())) {
+                ctx.diags.pushLoc(prop.loc, `Nexus nodes need cells specifier (Node is missing #${specifier}-cells property)`, vscode.DiagnosticSeverity.Error);
+                return;
+            }
+
+            let cellCount = cells.value[0].val[0].val as number;
+            if (mask && mask.array?.length !== cellCount) {
+                ctx.diags.pushLoc(mask.loc, `Nexus mask must be an array of ${cellCount} masks (e.g. < ${new Array(cellCount).fill('0xffffffff').join(' ')} >)`, vscode.DiagnosticSeverity.Error);
+                return;
+            }
+
+            if (passThru && mask.array?.length !== cellCount) {
+                ctx.diags.pushLoc(passThru.loc, `Nexus pass thru mask must be an array of ${cellCount} masks (e.g. < ${new Array(cellCount).fill('0xffffffff').join(' ')} >)`, vscode.DiagnosticSeverity.Error);
+                return;
+            }
+
+            let maskValue = mask ? (mask.value[0] as ArrayValue).val.map((v: IntValue) => v.val) : new Array<number>(cellCount).fill(0xffffffff);
+
+            // Validate each map entry:
+            let map = prop.value.map(v => {
+                if (!(v instanceof ArrayValue)) {
+                    ctx.diags.pushLoc(v.loc, `Nexus map values must be PHandle arrays`, vscode.DiagnosticSeverity.Error);
+                    return;
+                }
+
+                let inputCells = v.val.slice(0, cellCount);
+                let outputRef = v.val[cellCount];
+                let outputCells = v.val.slice(cellCount + 1);
+                if (inputCells.filter(c => {
+                        if (c instanceof IntValue) {
+                            return false;
+                        }
+                        ctx.diags.pushLoc(c.loc, `Input cells must be numbers, is ${c.constructor.name}`, vscode.DiagnosticSeverity.Error);
+                        return true;
+                    }).length) {
+                    return;
+                }
+
+                if (!(outputRef instanceof PHandle)) {
+                    let diag = ctx.diags.pushLoc(outputRef.loc, `Cell number ${cellCount + 1} should be a node reference`, vscode.DiagnosticSeverity.Error);
+                    diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(cells.loc, `#${specifier}-cells is ${cellCount}`)];
+                    return;
+                }
+
+                let outputNode = ctx.parser.getNode(outputRef.val);
+                if (!outputNode) {
+                    return; // Already generates a warning in the general PHandle check
+                }
+
+                let outputCellProp = outputNode.property(`#${specifier}-cells`);
+                if (!outputCellProp) {
+                    ctx.diags.pushLoc(outputRef.loc, `${outputRef.val} missing #${specifier}-cells property`, vscode.DiagnosticSeverity.Error);
+                    return;
+                }
+
+                if (outputCellProp.number === undefined) {
+                    return; // Already generates a warning in the general #-cells check
+                }
+
+                if (outputCells.length !== outputCellProp.number) {
+                    let diag = ctx.diags.pushLoc(outputRef.loc, `Node expects ${outputCellProp.number}, was ${outputCells.length}`, vscode.DiagnosticSeverity.Error);
+                    diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(outputCellProp.loc, `${outputCellProp.name} declared here`)];
+                    return;
+                }
+
+
+                if (outputCells.filter(c => {
+                        if (c instanceof IntValue) {
+                            return false;
+                        }
+
+                        ctx.diags.pushLoc(c.loc, `Output cells must be numbers, is ${c.constructor.name}`, vscode.DiagnosticSeverity.Error);
+                        return true;
+                    }).length) {
+                    return;
+                }
+
+                return { map: v, inputCells: inputCells.map(c => c.val as number), outputNode, outputCells: outputCells.map(c => c.val as number) };
+
+            });
+
+            // Look for duplicates:
+            // If the masked inputCells are the same for several entries, it won't be possible to figure out which is which.
+            let uniqueMaps: {[enc: string]: ArrayValue } = {};
+            map.filter(m => m).forEach(m => {
+                let encoded = `${m.inputCells.map((c, i) => '0x' + (c & maskValue[i]).toString(16)).join(' ')}`;
+                if (encoded in uniqueMaps) {
+                    let diag = ctx.diags.pushLoc(m.map.loc, `Entry is a duplicate (masked value of the first ${cellCount} cells must be unique)`);
+                    diag.relatedInformation = [
+                        new vscode.DiagnosticRelatedInformation(uniqueMaps[encoded].loc, `Duplicate of entry ${uniqueMaps[encoded].toString()}`),
+                        new vscode.DiagnosticRelatedInformation(new vscode.Location(m.map.loc.uri, m.map.val[0].loc.range.union(m.map.val[1].loc.range)), `Masked value is ${encoded}`),
+                    ];
+                    if (mask) {
+                        diag.relatedInformation.push(new vscode.DiagnosticRelatedInformation(mask.loc, 'Mask defined here'));
+                    }
+                } else {
+                    uniqueMaps[encoded] = m.map;
+                }
+            })
+
+        } else if (prop.name.endsWith('-names')) {
+            /* <id>-names entries should map to a <id>s entry that is an array with the same number of elements. */
+            let id = prop.name.match(/(.*)-names$/)[1];
+            if (!prop.stringArray) {
+                return; /* Generates warning in the property type check */
+            }
+
+            let name = id + 's';
+
+            let named = node.property(name);
+            if (!named) {
+                ctx.diags.pushLoc(prop.loc, `No matching property to name (expected a property named ${name} in ${node.fullName})`);
+                return;
+            }
+
+            if (named.value.length !== prop.value.length) {
+                let diag = ctx.diags.pushLoc(prop.loc, `Expected ${named.value.length} names, found ${prop.value.length}`);
+                diag.relatedInformation = [ new vscode.DiagnosticRelatedInformation(named.loc, `Property ${name} has ${named.value.length} elements.`)]
+                return;
+            }
+        }
+    });
 
     if (node.fullName === 'aliases' || node.fullName === 'chosen') {
         if (node.path === '/aliases/' || node.path === '/chosen/') {
             if (node.children().length > 0) {
-                ctx.diags.pushLoc(entry.nameLoc, `Node ${node.name} shouldn't have child nodes`, vscode.DiagnosticSeverity.Error);
+                node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Node ${node.name} shouldn't have child nodes`, vscode.DiagnosticSeverity.Error));
             }
 
-            entry.properties.forEach(p => {
-                if (p.value.raw.startsWith('&')) {
-                    var ref = ctx.parser.getNode(p.value.raw);
-                    if (!ref) {
-                        ctx.diags.pushLoc(p.loc, `Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error);
-                    }
-                } else if (typeof p.value.actual === 'string') {
-                    var ref = ctx.parser.getNode(p.value.actual);
-                    if (!ref) {
-                        ctx.diags.pushLoc(p.loc, `Unknown reference to ${p.value.raw}`, vscode.DiagnosticSeverity.Error);
-                    }
-                } else {
-                    ctx.diags.pushLoc(p.loc, `Properties in ${node.name} must be references to nodes`, vscode.DiagnosticSeverity.Error);
+            node.entries.forEach(entry => entry.properties.forEach(p => {
+                if (p.value.length !== 1) {
+                    ctx.diags.pushLoc(p.loc, `All properties in ${node.fullName} must be singluar`, vscode.DiagnosticSeverity.Error);
+                    return;
                 }
-            });
+
+                let val = p.pHandle?.val ?? p.string;
+                if (!val) {
+                    ctx.diags.pushLoc(p.loc, `Properties in ${node.name} must be references to nodes`, vscode.DiagnosticSeverity.Error);
+                } else if (!ctx.parser.getNode(val)) {
+                    ctx.diags.pushLoc(p.loc, `Unknown reference to ${val.toString()}`, vscode.DiagnosticSeverity.Error);
+                }
+            }));
         } else {
-            ctx.diags.pushLoc(entry.nameLoc, `Node ${node.name} must be under the root node`, vscode.DiagnosticSeverity.Error);
+            node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Node ${node.name} must be under the root node`, vscode.DiagnosticSeverity.Error));
         }
         return;
     }
 
     if (node.fullName === 'cpus') {
         if (node.path !== '/cpus/') {
-            ctx.diags.pushLoc(entry.nameLoc, `Node cpus must be directly under the root node`, vscode.DiagnosticSeverity.Error);
+            node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Node cpus must be directly under the root node`, vscode.DiagnosticSeverity.Error));
         }
     }
 
     // Check overlapping ranges
-    if (props.find(p => p.name === '#address-cells' && p.value.actual === 1) && props.find(p => p.name === '#size-cells' && p.value.actual === 1)) {
-        let ranges = new Array<{ n: NodeEntry, start: number, size: number }>();
-        entry.children.forEach(c => {
-            let reg = c.properties.find(p => p.name === 'reg');
-            if (c.node.enabled() && reg && isArray(reg.value.actual)) {
-                let range = { n: c, start: reg.value.actual[0], size: reg.value.actual[1] };
+    let addressCells = node.property('#address-cells')?.number ?? 2;
+    let sizeCells = node.property('#size-cells')?.number ?? 1;
+    if (addressCells === 1 && sizeCells === 1) {
+        let ranges = new Array<{ n: Node, start: number, size: number }>();
+        node.children().forEach(c => {
+            let reg = c.property('reg');
+            if (c.enabled() && reg?.array) {
+                let range = { n: c, start: reg.array[0], size: reg.array[1] };
                 let overlap = ranges.find(r => r.start + r.size > range.start && range.start + range.size > r.start);
                 if (overlap) {
-                    let diag = ctx.diags.pushLoc(c.nameLoc, `Range overlaps with ${overlap.n.node.fullName}`);
-                    if (overlap.start < range.start) {
-                        diag.message += ` (ends at 0x${(overlap.start + overlap.size).toString(16)})`;
-                    } else {
-                        diag.message += ` (${c.node.fullName} ends at 0x${(range.start + range.size).toString(16)})`;
-                    }
-                    diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(overlap.n.nameLoc.uri, overlap.n.nameLoc.range), `${overlap.n.node.fullName} declared here`)];
+                    c.entries.forEach(e => {
+                        let diag = ctx.diags.pushLoc(e.nameLoc, `Range overlaps with ${overlap.n.fullName}`);
+                        if (overlap.start < range.start) {
+                            diag.message += ` (ends at 0x${(overlap.start + overlap.size).toString(16)})`;
+                        } else {
+                            diag.message += ` (${c.fullName} ends at 0x${(range.start + range.size).toString(16)})`;
+                        }
+
+                        diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(overlap.n.entries[0].nameLoc, `${overlap.n.fullName} declared here`)];
+                    });
                 }
 
                 ranges.push(range);
@@ -67,133 +263,154 @@ function lintNode(entry: NodeEntry, ctx: LintCtx) {
     }
 
     if (!node.type) {
-        ctx.diags.pushLoc(entry.nameLoc, `Unknown node type`);
-        return;
+        node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Unknown node type`));
+        return; // !!! The rest of the block depends on the type being resolved
     }
 
-    if (node.type['on-bus'] && node.type['on-bus'] !== node.parent?.type?.['bus']) {
-        ctx.diags.pushLoc(entry.nameLoc, `Node should only occur on the ${node.type['on-bus']} bus.`, vscode.DiagnosticSeverity.Error);
+    if (node.parent?.type?.['bus']) {
+        if (!node.type?.['on-bus']) {
+            node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Only ${node.parent.type['bus']} nodes accepted in ${node.parent.path}.`, vscode.DiagnosticSeverity.Error));
+        } else if (node.type['on-bus'] !== node.parent?.type?.['bus']) {
+            node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Node should only occur on the ${node.type['on-bus']} bus.`, vscode.DiagnosticSeverity.Error));
+        }
+    } else if (node.type?.['on-bus']) {
+        node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Node should only occur on the ${node.type['on-bus']} bus.`, vscode.DiagnosticSeverity.Error));
+    }
+
+    if (node.parent && node.type["on-bus"] === 'spi') {
+        let reg = node.property('reg')?.number;
+        let cs = node.parent.property('cs-gpios');
+        if (reg === undefined) {
+            node.entries.forEach(e => ctx.diags.pushLoc(e.loc, `SPI devices must have a register property on the format < 1 >`, vscode.DiagnosticSeverity.Error));
+        } else if (!cs?.pHandleArray) {
+            node.parent.entries.forEach(e => ctx.diags.pushLoc(e.nameLoc, `Missing cs-gpios property. Required for nodes on spi bus.`, vscode.DiagnosticSeverity.Error));
+        } else if (cs.pHandleArray.length <= reg) {
+            node.entries.forEach(e => {
+                let diag = ctx.diags.pushLoc(e.loc, `No cs-gpios entry for SPI device ${reg}`, vscode.DiagnosticSeverity.Error);
+                diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(cs.loc, `SPI bus cs-gpios property declared here`)];
+            });
+        }
     }
 
     node.type.properties.forEach(propType => {
-        var prop = props.find(p => p.name === propType.name);
-        if (prop) {
-            prop = entry.properties.find(p => p.name === prop.name);
-            if (prop) {
-                const correctType = (type: types.PropertyTypeString) => {
-                    const isPhandleArrayElem = (e) => {
-                        if (Array.isArray(e)) {
-                            return e.every(isPhandleArrayElem);
-                        }
-
-                        return (typeof e === 'number') || (typeof e === 'string' && e.startsWith('&'));
-                    };
-
-                    switch (type) {
-                        case 'array':
-                            return (typeof prop.value.actual === 'number') || (Array.isArray(prop.value.actual) && (prop.value.actual as any[]).every(v => typeof v === 'number'));
-                        case 'boolean':
-                            return (typeof prop.value.actual === 'boolean');
-                        case 'compound':
-                            return true; // any
-                        case 'int':
-                            return (typeof prop.value.actual === 'number') || (Array.isArray(prop.value.actual) && prop.value.actual.length === 1 && typeof prop.value.actual[0] === 'number');
-                        case 'phandle':
-                            /* PHandles can be numbers if there's a node with that number as the value of their phandle property. */
-                            return ((typeof prop.value.actual === 'object') && ('node' in prop.value.actual)) ||
-                                ((typeof prop.value.actual === 'number') && (ctx.parser.getPHandleNode(prop.value.actual)));
-                        case 'phandle-array':
-                            return isPhandleArrayElem(prop.value.actual);
-                        case 'string':
-                            return (typeof prop.value.actual === 'string');
-                        case 'string-array':
-                            return (typeof prop.value.actual === 'string') || (Array.isArray(prop.value.actual) && (prop.value.actual as any[]).every(v => typeof v === 'string'));
-                        case 'uint8-array':
-                            return (Array.isArray(prop.value.actual) && (prop.value.actual as any[]).every(v => typeof v === 'number') && prop.value.raw.match(/\[[\da-fA-F\s]+\]/));
-                        default:
-                            return true;
-                    }
-                };
-
-                if (Array.isArray(propType.type)) {
-                    if (!propType.type.find(correctType)) {
-                        ctx.diags.pushLoc(prop.loc, 'Property value type must be one of ' + propType.type.join(', '));
-                    }
-                } else if (!correctType(propType.type)) {
-                    ctx.diags.pushLoc(prop.loc, `Property value type must be ${propType.type}`);
-                }
-
-                if (propType.enum && propType.enum.indexOf(prop.value.actual.toString()) < 0) {
-                    ctx.diags.pushLoc(prop.loc, 'Property value must be one of ' + propType.enum.join(', '));
-                }
-
-                if (propType.const !== undefined && propType.const !== prop.value.actual) {
-                    ctx.diags.pushLoc(prop.loc, `Property value must be ${propType.const}`);
-                }
-
-                if (propType.type === 'phandle-array') {
-                    (<(string | number)[]>prop.value.actual).forEach(e => {
-                        if (typeof e === 'string' && !ctx.parser.getPHandleNode(e.slice(1))) {
-                            ctx.diags.pushLoc(prop.loc, `Unknown label`);
-                        }
-                    })
-                }
-
-                if (prop.name === 'reg') {
-                    var cells = getCells(prop.name, node.parent);
-
-                    if (cells) {
-                        if ((typeof prop.value.actual === 'number' && cells.length !== 1) ||
-                            (Array.isArray(prop.value.actual) && prop.value.actual.length !== cells.length)) {
-                            ctx.diags.pushLoc(prop.loc, `reg property must be on format <${cells.join(' ')}>`, vscode.DiagnosticSeverity.Error);
-                        } else if (cells.length > 0 && cells[0] === 'addr' && node.address !== NaN && node.address !== prop.value.actual && node.address !== prop.value.actual[0]) {
-                            ctx.diags.pushLoc(prop.loc, `Node address does not match address cell (expected 0x${node.address.toString(16)})`);
-                        }
-                    } else {
-                        ctx.diags.pushLoc(prop.loc, `Unable to fetch addr and size count`, vscode.DiagnosticSeverity.Error);
-                    }
-
-                    if (node.parent && node.type["on-bus"] === 'spi') {
-                        let cs = node.parent.property('cs-gpios');
-                        if (!cs || !Array.isArray(cs.value.actual) || cs.value.actual.length <= prop.value.actual) {
-                            ctx.diags.pushLoc(prop.loc, `No cs-gpios entry for SPI device ${prop.value.actual}`);
-                        }
-                    }
-                } else if (prop.name === 'compatible') {
-                    let types: string[] = typeof prop.value.actual === 'string' ? [prop.value.actual] : prop.value.actual as string[];
-                    types.forEach(t => {
-                        var type = ctx.types.get(t);
-                        if (!type) {
-                            ctx.diags.pushLoc(prop.loc, `Unknown node type ${t}`);
-                        }
-                    });
-                } else if (propType.type === 'phandle-array' && Array.isArray(prop.value.actual)) {
-                    let c = getPHandleCells(prop.name, node.parent);
-                    if (c) {
-                        let value = c.value.actual as (string | number)[];
-                        if (typeof c.value.actual === 'number') {
-                            if ((value.length % (c.value.actual + 1)) !== 0) {
-                                ctx.diags.pushLoc(prop.loc, `PHandle array must have ${c.value.actual} number cells`, vscode.DiagnosticSeverity.Error);
-                            }
-                        } else {
-                            ctx.diags.pushLoc(prop.loc, `Parent's *-cells property must be an int`, vscode.DiagnosticSeverity.Error);
-                        }
-                    }
-                }
-            }
-        } else if (propType.required) {
-            let status = props.find(p => p.name === 'status');
-            ctx.diags.pushLoc(entry.nameLoc, `Property "${propType.name}" is required`, (status && status.value.raw === 'okay') ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Information);
+        if (!node.property(propType.name) && propType.required) {
+            node.entries.forEach(e => ctx.diags.pushLoc(e.nameLoc, `Property "${propType.name}" is required`, node.enabled() ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Information));
         }
     });
 
-    entry.properties.forEach(p => {
-        if (!node.type.properties.find(t => t.name === p.name)) {
-            ctx.diags.pushLoc(p.loc, `Property not mentioned in type "${node.type.name ?? (node.parent?.type?.name ?? '<unknown>') + '::child-node'}"`);
-        }
-    });
 }
 
-export function lint(entries: NodeEntry[], ctx: LintCtx) {
-    entries.forEach(e => lintNode(e, ctx));
+function lintEntry(entry: NodeEntry, ctx: LintCtx) {
+    var node = entry.node;
+
+    entry.properties.forEach(prop => {
+        // type specific checks:
+        prop.value.filter(v => v instanceof ArrayValue).forEach((v: ArrayValue) => {
+            v.val.forEach((e, i) => {
+                if (!(e instanceof PHandle)) {
+                    return;
+                }
+
+                let ref = ctx.parser.getNode(e.val);
+                if (!ref) {
+                    ctx.diags.pushLoc(e.loc, `Unknown label`);
+                } else {
+                    /* Some nodes define the number of additional cells required when they're being referenced, as a sort of parameter list.
+                     * For instance, a PWM controller can have a property #pwm-cells = < 2 >, and when another node wants to reference it in a property called pwms,
+                     * it has to follow the reference with two cells of numbers, e.g. like < &my-pwm 1 2 >.
+                     */
+                    let cells = getPHandleCells(prop.name, ref);
+                    if (cells && cells.value.length === 1 && (cells.value[0] instanceof ArrayValue) && ((<ArrayValue>cells.value[0]).isNumber())) {
+                        let count = cells.value[0].val[0] as number;
+                        if (v.length < i + count) {
+                            ctx.diags.pushLoc(e.loc, `${e.toString()} must be followed by ${count} cells`);
+                        } else {
+                            let nonNums = v.val.slice(i + 1, i + 1 + count).filter(e => !(e instanceof IntValue));
+                            if (nonNums.length > 0) {
+                                let diag = ctx.diags.pushLoc(e.loc, `${e.toString()} requires ${count} numeric cells when referenced`);
+                                diag.relatedInformation = nonNums.map(n => new vscode.DiagnosticRelatedInformation(n.loc, `${n.toString()} is ${n.constructor.name}, expected number.`));
+                            }
+                        }
+                    }
+
+                }
+            });
+        });
+
+        prop.value.filter(v => v instanceof PHandle).forEach((v: PHandle) => {
+            if ((v instanceof PHandle) && !ctx.parser.getNode(v.val)) {
+                ctx.diags.pushLoc(v.loc, `Unknown path label`);
+            }
+        });
+
+        // Some nodes don't adhere to the normal type checking:
+        const specialNodes = [
+            'chosen', 'aliases'
+        ];
+
+        if (specialNodes.includes(node.name)) {
+            return;
+        }
+
+        // Per-property type check:
+        let propType = node.type?.properties.find(p => p.name === prop.name);
+        if (node.type && !propType) {
+            ctx.diags.pushLoc(prop.loc, `Property not mentioned in "${node.type.name}"`);
+            return; // !!! The rest only runs if we find the type
+        }
+
+        let actualPropType = prop.type();
+
+        const equivalent = {
+            'string-array': 'string',
+            'phandle-array': 'phandles',
+            'array': 'int'
+        };
+
+        if (propType.type !== 'compound') {
+            if (Array.isArray(propType.type)) {
+                if (!propType.type.includes(actualPropType) && !propType.type.map(t => equivalent[t]).includes(actualPropType)) {
+                    ctx.diags.pushLoc(prop.loc, `Property value type must be one of ${propType.type.join(', ')}, was ${actualPropType}`);
+                }
+            } else if (propType.type !== actualPropType && equivalent[propType.type] !== actualPropType) {
+                ctx.diags.pushLoc(prop.loc, `Property value type must be ${propType.type}, was ${actualPropType}`);
+            }
+        }
+
+        if (propType.enum) {
+            if (prop.value.length > 1) {
+                ctx.diags.pushLoc(prop.loc, `Expected non-array type for value with enum`);
+            } else if (!propType.enum.includes(prop.value[0].val.toString())) {
+                ctx.diags.pushLoc(prop.loc, 'Property value must be one of ' + propType.enum.join(', '));
+            }
+        }
+
+        if (propType.const !== undefined && propType.const !== (prop.number ?? prop.string)) {
+            ctx.diags.pushLoc(prop.loc, `Property value must be ${propType.const}`);
+        }
+    });
+
+    let redundantEntries = 0;
+    entry.properties.forEach(p => {
+        let final = node.property(p.name);
+        if (p !== final) {
+            let diag = ctx.diags.pushLoc(p.loc, 'Overridden by later entry', vscode.DiagnosticSeverity.Hint);
+            diag.tags = [vscode.DiagnosticTag.Unnecessary];
+            diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(final.loc, 'Active entry defined here')];
+            redundantEntries++;
+        }
+    });
+
+    if (entry.properties.length === 0 && entry.children.length === 0) {
+        let diag = ctx.diags.pushLoc(entry.nameLoc, 'Empty node', vscode.DiagnosticSeverity.Hint)
+        diag.tags = [vscode.DiagnosticTag.Unnecessary];
+    } else if (redundantEntries === entry.properties.length && entry.children.length === 0) {
+        let diag = ctx.diags.pushLoc(entry.nameLoc, 'All properties are overridden by later entries', vscode.DiagnosticSeverity.Hint);
+        diag.tags = [vscode.DiagnosticTag.Unnecessary];
+    }
+}
+
+export function lint(ctx: LintCtx) {
+    ctx.parser.entries.forEach(e => lintEntry(e, ctx));
+    Object.values(ctx.parser.nodes).forEach(n => lintNode(n, ctx));
 }

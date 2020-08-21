@@ -562,11 +562,17 @@ export class Property {
             return '?';
         }
 
-        if (this.value.length === 1 && this.value[0] instanceof BoolValue) {
+        if (this.boolean) {
             return 'true';
         }
 
         return this.value.map(v => v.toString()).join(', ');
+    }
+
+    get boolean() {
+        if (this.value.length === 1 && (this.value[0] instanceof BoolValue)) {
+            return true;
+        }
     }
 
     get number() {

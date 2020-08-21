@@ -1260,29 +1260,30 @@ export function getCells(propName: string, parent?: Node): string[] | undefined 
         let addrCells = 2;
         let sizeCells = 1;
         if (parent) {
-            let parentProps = parent.uniqueProperties();
-
-            let addrCellsProp = parentProps.find(p => p.name === '#address-cells');
-            if (addrCellsProp) {
-                addrCells = addrCellsProp.value[0].val as number;
+            let addrCellsProp = parent.property('#address-cells');
+            if (addrCellsProp?.number !== undefined) {
+                addrCells = addrCellsProp.number;
             }
 
-            let sizeCellsProp = parentProps.find(p => p.name === '#size-cells');
-            if (sizeCellsProp) {
-                sizeCells = sizeCellsProp.value[0].val as number;
+            let sizeCellsProp = parent.property('#size-cells');
+            if (sizeCellsProp?.number !== undefined) {
+                sizeCells = sizeCellsProp.number;
             }
         }
-        return Array(addrCells).fill('addr').concat(Array(sizeCells).fill('size'));
+        return [...Array(addrCells).fill('addr'), ...Array(sizeCells).fill('size')];
     }
 }
 
-export function getPHandleCells(propname: string, parent: Node): Property {
+export function cellName(propname: string) {
     if (propname.endsWith('s')) {
         /* Weird rule: phandle array cell count is determined by the #XXX-cells entry in the parent,
          * where XXX is the singular version of the name of this property UNLESS the property is called XXX-gpios, in which
          * case the cell count is determined by the parent's #gpio-cells property
          */
-        let cellName = propname.endsWith('-gpios') ? '#gpio-cells' : ('#' + propname.slice(0, propname.length) + '-cells')
-        return parent.property(cellName);
+        return propname.endsWith('-gpios') ? '#gpio-cells' : ('#' + propname.slice(0, propname.length) + '-cells')
     }
+}
+
+export function getPHandleCells(propname: string, parent: Node): Property {
+    return parent.property(cellName(propname));
 }

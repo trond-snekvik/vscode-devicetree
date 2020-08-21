@@ -158,18 +158,6 @@ export class ArrayValue extends PropertyValue {
         return this.val.length;
     }
 
-    get forEach() {
-        return this.val.forEach;
-    }
-
-    get find() {
-        return this.val.find;
-    }
-
-    get every() {
-        return this.val.every;
-    }
-
     isNumberArray() {
         return this.val.every(v => v instanceof IntValue);
     }

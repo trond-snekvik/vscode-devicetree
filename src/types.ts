@@ -471,7 +471,7 @@ export class TypeLoader {
         var getBaseType = () => {
             let candidates = [node.path];
 
-            if (node.path.match(/\/cpus\/cpu[^\/]*$/)) {
+            if (node.path.match(/\/cpus\/cpu[^\/]*\/$/)) {
                 candidates.push('/cpus/cpu');
             }
 

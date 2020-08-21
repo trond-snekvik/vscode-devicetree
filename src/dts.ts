@@ -1041,7 +1041,7 @@ export class Parser {
                 }
 
                 if (nodeStack.length > 0) {
-                    let p = new Property(name[0], nameLoc, undefined, labels);
+                    let p = new Property(name[0], nameLoc, state, labels);
                     nodeStack[nodeStack.length - 1].properties.push(p);
                     labels = [];
                     continue;

@@ -63,12 +63,9 @@ export class IntValue extends PropertyValue {
         }
     }
 
-    toString() {
-        if (this.hex) {
-            return `< 0x${this.val.toString(16)} >`;
-        }
-
-        return `< ${this.val} >`
+    toString(raw=false) {
+        let val = this.hex ? `0x${this.val.toString(16)}` : this.val;
+        return raw ? val : `< ${val} >`
     }
 }
 
@@ -190,7 +187,7 @@ export class ArrayValue extends PropertyValue {
     }
 
     toString() {
-        return `< ${this.val.map(v => v.toString())} >`;
+        return `< ${this.val.map(v => v.toString(true)).join(' ')} >`;
     }
 }
 
@@ -217,21 +214,36 @@ export class BytestringValue extends PropertyValue {
 }
 
 export class PHandle extends PropertyValue {
-    val: string;
+    val: string; // includes & (e.g. &gpio0)
+    isRef: boolean;
 
-    private constructor(value: string, loc: vscode.Location) {
+    private constructor(value: string, isRef: boolean, loc: vscode.Location) {
         super(value, loc);
     }
 
     static match(state: ParserState): PHandle {
-        let phandle = state.match(/^&([\w\-]+)/);
+        let phandle = state.match(/^&\{([\w\-\/@]+)\}/); // path reference
         if (phandle) {
-            return new PHandle(phandle[1], state.location());
+            return new PHandle(phandle[1], false, state.location());
+        }
+
+        phandle = state.match(/^&[\w\-]+/);
+        if (phandle) {
+            return new PHandle(phandle[0], true, state.location());
+        }
+        // can be path:
+        phandle = state.match(/^"(.+?)"/); // deprecated?
+        if (phandle) {
+            return new PHandle(phandle[1], false, state.location());
         }
     }
 
-    toString() {
-        return `$${this.val}`;
+    toString(raw=true) {
+        if (this.isRef) {
+            return raw ? this.val : `< ${this.val} >`;
+        }
+
+        return `"${this.val}"`;
     }
 }
 
@@ -554,7 +566,7 @@ export class Property {
             return 'true';
         }
 
-        return this.value.map(v => v.val).join(', ');
+        return this.value.map(v => v.toString()).join(', ');
     }
 
     get number() {

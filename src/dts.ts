@@ -641,13 +641,14 @@ export class Property {
 
                     return 'invalid';
                 }
+                if (v.length > 1) {
+                    if (v.val.every(e => e instanceof PHandle)) {
+                        return 'phandles';
+                    }
 
-                if (v.every(e => e instanceof PHandle)) {
-                    return 'phandles';
-                }
-
-                if (v.every(e => e instanceof IntValue)) {
-                    return 'array';
+                    if (v.val.every(e => e instanceof IntValue)) {
+                        return 'array';
+                    }
                 }
 
                 return 'phandle-array';
@@ -674,11 +675,11 @@ export class Property {
 
         if (this.value.every(v => v instanceof ArrayValue)) {
 
-            if (this.value.every((v: ArrayValue) => v.every(e => e instanceof PHandle))) {
+            if (this.value.every((v: ArrayValue) => v.val.every(e => e instanceof PHandle))) {
                 return 'phandles';
             }
 
-            if (this.value.every((v: ArrayValue) => v.every(e => e instanceof IntValue))) {
+            if (this.value.every((v: ArrayValue) => v.val.every(e => e instanceof IntValue))) {
                 return 'array';
             }
 

@@ -800,16 +800,12 @@ export class Node {
         } else {
             this.fullName = name;
         }
-        if (parent) {
-            this.path = parent.path + this.fullName + '/';
-        } else {
-            this.path = this.fullName;
-        }
-        this.parent = parent;
         if (address) {
             this.address = parseInt(address, 16);
         }
 
+        this.path = (parent?.path ?? '') + this.fullName + '/';
+        this.parent = parent;
         this.name = name;
         this.deleted = false;
         this.entries = [];
@@ -817,7 +813,7 @@ export class Node {
 
     enabled(): boolean {
         let status = this.property('status');
-        return !status || (status.value[0].val === 'okay');
+        return !status?.string || (['okay', 'ok'].includes(status.string));
     }
 
     hasLabel(label: string) {
@@ -1005,18 +1001,6 @@ export class Parser {
                         this.nodes[node.path] = node;
                     }
 
-                    // find existing alias for this node:
-                    let existingNode: Node;
-                    labels.find(l => {
-                        existingNode = this.nodes['&' + l];
-                        return !!existingNode;
-                    });
-
-                    if (existingNode) {
-                        node.entries.push(...existingNode.entries);
-                        delete this.nodes[existingNode.name];
-                    }
-
                     let entry = new NodeEntry(nameLoc, node, nameLoc, ctx, entries++);
 
                     entry.labels.push(...labels);
@@ -1025,7 +1009,7 @@ export class Parser {
 
                     if (nodeStack.length === 0) {
                         ctx.roots.push(entry);
-                    } else if (nodeStack[nodeStack.length - 1].children.indexOf(entry) === -1) {
+                    } else {
                         nodeStack[nodeStack.length - 1].children.push(entry);
                         entry.parent = nodeStack[nodeStack.length - 1];
                     }
@@ -1082,7 +1066,6 @@ export class Parser {
                 if (!node) {
                     state.pushDiag('Unknown label', vscode.DiagnosticSeverity.Error, refLoc);
                     node = new Node(refMatch[1]);
-                    this.nodes[node.name] = node;
                 }
 
                 let entry = new NodeEntry(refLoc, node, refLoc, ctx, entries++);

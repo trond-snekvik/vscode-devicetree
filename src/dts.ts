@@ -591,6 +591,9 @@ export class Property {
         if (this.value.length === 1 && (this.value[0] instanceof ArrayValue) && this.value[0].val.length === 1 && (this.value[0].val[0] instanceof PHandle)) {
             return this.value[0].val[0] as PHandle;
         }
+        if (this.value.length === 1 && (this.value[0] instanceof PHandle)) {
+            return this.value[0] as PHandle;
+        }
     }
 
     get bytestring() {

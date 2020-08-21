@@ -821,9 +821,9 @@ export class Node {
     }
 
     children(): Node[] {
-        let children: Node[] = [];
-        this.entries.forEach(e => children.push(...e.children.map(c => c.node)));
-        return children;
+        let children: { [path: string]: Node } = {};
+        this.entries.forEach(e => e.children.forEach(c => children[c.node.path] = c.node));
+        return Object.values(children);
     }
 
     get sortedEntries() {

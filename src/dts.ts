@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { MacroInstance, Macro, preprocess, IncludeStatement } from './preprocessor';
+import { MacroInstance, Macro, preprocess, IncludeStatement, LineMacro, FileMacro, CounterMacro } from './preprocessor';
 import { DiagnosticsSet } from './diags';
 import { NodeType, TypeLoader } from './types';
 
@@ -923,7 +923,7 @@ export class Parser {
         let ctx = new DTSCtx(doc.uri, kind);
         let macros: Macro[];
         if (kind !== CtxKind.Board && this.boardCtx) {
-            macros = this.boardCtx.macros;
+            macros = this.boardCtx.macros.filter(m => !(m instanceof LineMacro) && !(m instanceof CounterMacro) && !(m instanceof FileMacro));
         } else {
             macros = Object.keys(this.defines).map(d => new Macro(d, this.defines[d]));
         }

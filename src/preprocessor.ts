@@ -123,7 +123,7 @@ export class Macro {
     }
 };
 
-class LineMacro extends Macro {
+export class LineMacro extends Macro {
     find(text: string, defines: Macro[], loc: vscode.Location, inMacro=false): MacroInstance[] {
         this.value = (loc.range.start.line + 1).toString();
         return super.find(text ,defines, loc, inMacro);
@@ -134,7 +134,7 @@ class LineMacro extends Macro {
     }
 }
 
-class FileMacro extends Macro {
+export class FileMacro extends Macro {
     private cwd: string;
 
     find(text: string, defines: Macro[], loc: vscode.Location, inMacro=false): MacroInstance[] {
@@ -148,7 +148,7 @@ class FileMacro extends Macro {
     }
 }
 
-class CounterMacro extends Macro {
+export class CounterMacro extends Macro {
     private number = 0;
 
     find(text: string, defines: Macro[], loc: vscode.Location, inMacro=false): MacroInstance[] {

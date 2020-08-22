@@ -215,7 +215,7 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
 
     const result = {
         lines: new Array<Line>(),
-        macros: [new LineMacro(), new FileMacro(vscode.env.appRoot), new CounterMacro(), ...macros],
+        macros: new Array<Macro>(),
         includes: new Array<IncludeStatement>(),
     };
 
@@ -266,7 +266,7 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
                     }
 
                     value = value.replace(new RegExp(`defined\\((.*?)\\)`, 'g'), (t, define) => {
-                        return result.macros.some(d => !d.undef && d.name === define) ? '1' : '0';
+                        return macros.some(d => !d.undef && d.name === define) ? '1' : '0';
                     });
 
                     scopes.push({line: line, condition: !!this.evaluate(value, line.location)});
@@ -280,7 +280,7 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
                         continue;
                     }
 
-                    scopes.push({line: line, condition: result.macros.some(d => !d.undef && d.name === value)});
+                    scopes.push({line: line, condition: macros.some(d => !d.undef && d.name === value)});
                     continue;
                 }
 
@@ -291,7 +291,7 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
                         continue;
                     }
 
-                    scopes.push({line: line, condition: !result.macros.some(d => !d.undef && d.name === value)});
+                    scopes.push({line: line, condition: !macros.some(d => !d.undef && d.name === value)});
                     continue;
                 }
 
@@ -325,7 +325,7 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
 
                     let condition = this.replaceDefines(value, line.location);
                     condition = condition.replace(new RegExp(`defined\\((.*?)\\)`, 'g'), (t, define) => {
-                        return result.macros.some(d => !d.undef && d.name === define) ? '1' : '0';
+                        return macros.some(d => !d.undef && d.name === define) ? '1' : '0';
                     });
 
                     scopes[scopes.length - 1].condition = this.evaluate(condition, line.location);
@@ -354,13 +354,16 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
                         continue;
                     }
 
-                    const existing = result.macros.find(d => !d.undef && d.name === define[1]);
-                    if (existing !== undefined) {
+                    const existing = macros.find(d => d.name === define[1]);
+                    if (existing && !existing.undef) {
                         pushLineDiag(line, 'Duplicate definition');
                         continue;
                     }
 
-                    result.macros.push(new Macro(define[1], define[3], line, define[2]?.split(',').map(a => a.trim())));
+                    const macro = existing ?? new Macro(define[1], define[3], line, define[2]?.split(',').map(a => a.trim()));
+                    macro.undef = undefined;
+                    result.macros.push(macro);
+                    macros.push(macro);
                     continue;
                 }
 
@@ -371,7 +374,7 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
                         continue;
                     }
 
-                    const define = result.macros.find(d => d.name === undef[0]);
+                    const define = macros.find(d => d.name === undef[0]);
                     if (!define || define.undef) {
                         pushLineDiag(line, 'Unknown define');
                         continue;
@@ -442,8 +445,8 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
             }
 
             const lineMacros = [];
-            result.macros.filter(d => !d.undef).forEach(d => {
-                lineMacros.push(...d.find(text, result.macros, line.location));
+            macros.filter(d => !d.undef).forEach(d => {
+                lineMacros.push(...d.find(text, macros, line.location));
             });
 
             result.lines.push(new Line(text, line.number, line.uri, lineMacros));

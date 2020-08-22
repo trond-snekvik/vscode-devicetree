@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as zephyr from './zephyr';
 import { MacroInstance, Macro, preprocess, IncludeStatement, LineMacro, FileMacro, CounterMacro } from './preprocessor';
 import { DiagnosticsSet } from './diags';
 import { NodeType, TypeLoader } from './types';
@@ -528,11 +530,13 @@ export class Property {
     value: PropertyValue[];
     loc: vscode.Location;
     fullRange: vscode.Range;
+    entry: NodeEntry;
 
-    constructor(name: string, loc: vscode.Location, state: ParserState, labels?: string[]) {
+    constructor(name: string, loc: vscode.Location, state: ParserState, entry: NodeEntry, labels: string[]=[]) {
         this.name = name;
         this.loc = loc;
         this.labels = labels;
+        this.entry = entry;
         this.value = parsePropValue(state);
         this.fullRange = new vscode.Range(loc.range.start, state.location().range.end);
     }
@@ -710,12 +714,7 @@ export class OffsetRange {
     }
 }
 
-enum CtxKind {
-    Board,
-    Overlay,
-}
-
-export class DTSCtx {
+export class DTSFile {
     uri: vscode.Uri;
     lines: Line[];
     roots: NodeEntry[];
@@ -723,28 +722,54 @@ export class DTSCtx {
     includes: IncludeStatement[];
     macros: Macro[];
     diags: DiagnosticsSet;
-    kind: CtxKind;
+    dirty=false;
+    priority: number;
+    ctx: DTSCtx;
 
-    constructor(uri: vscode.Uri, kind: CtxKind) {
+    constructor(uri: vscode.Uri, ctx: DTSCtx) {
         this.uri = uri;
-        this.kind = kind;
         this.diags = new DiagnosticsSet();
-        this.reset();
-    }
-
-    match(uri: vscode.Uri) {
-        return (
-            this.uri.toString() === uri.toString() ||
-            this.includes.find(include => uri.toString() === include.dst.toString()));
-    }
-
-    reset() {
+        this.ctx = ctx;
+        this.priority = ctx.fileCount;
         this.lines = [];
         this.roots = [];
         this.entries = [];
         this.includes = [];
         this.macros = [];
-        this.diags.clear();
+    }
+
+    remove() {
+        this.entries.forEach(e => {
+            e.node.entries = e.node.entries.filter(nodeEntry => nodeEntry !== e);
+        });
+        this.entries = [];
+        this.dirty = true;
+    }
+
+    has(uri: vscode.Uri) {
+        return (
+            this.uri.toString() === uri.toString() ||
+            this.includes.find(include => uri.toString() === include.dst.toString()));
+    }
+
+    getNodeAt(pos: vscode.Position, uri: vscode.Uri): Node {
+        return this.getEntryAt(pos, uri)?.node;
+    }
+
+    getEntryAt(pos: vscode.Position, uri: vscode.Uri): NodeEntry {
+        const entries = this.entries.filter(e => e.loc.uri.fsPath === uri.fsPath && e.loc.range.contains(pos));
+        if (entries.length === 0) {
+            return undefined;
+        }
+
+        /* When multiple nodes are matching, they extend each other,
+         * and the one with the longest path is the innermost child.
+         */
+        return entries.sort((a, b) => b.node.path.length - a.node.path.length)[0];
+    }
+
+    getPropertyAt(pos: vscode.Position, uri: vscode.Uri): Property {
+        return this.getEntryAt(pos, uri)?.properties.find(p => p.fullRange.contains(pos));
     }
 }
 
@@ -757,17 +782,17 @@ export class NodeEntry {
     ref?: string;
     loc: vscode.Location;
     nameLoc: vscode.Location;
-    ctx: DTSCtx;
+    file: DTSFile;
     number: number;
 
-    constructor(loc: vscode.Location, node: Node, nameLoc: vscode.Location, ctx: DTSCtx, number: number) {
+    constructor(loc: vscode.Location, node: Node, nameLoc: vscode.Location, ctx: DTSFile, number: number) {
         this.node = node;
         this.children = [];
         this.properties = [];
         this.loc = loc;
         this.nameLoc = nameLoc;
         this.labels = [];
-        this.ctx = ctx;
+        this.file = ctx;
         this.number = number;
     }
 }
@@ -792,7 +817,12 @@ export class Node {
             this.address = parseInt(address, 16);
         }
 
-        this.path = (parent?.path ?? '') + this.fullName + '/';
+        if (parent) {
+            this.path = parent.path + this.fullName + '/';
+        } else {
+            this.path = '/';
+        }
+
         this.parent = parent;
         this.name = name;
         this.deleted = false;
@@ -815,7 +845,7 @@ export class Node {
     }
 
     get sortedEntries() {
-        return this.entries.sort((a, b) => 1000000 * (a.ctx.kind - b.ctx.kind) + (a.number - b.number));
+        return this.entries.sort((a, b) => 1000000 * (a.file.priority - b.file.priority) + (a.number - b.number));
     }
 
     labels(): string[] {
@@ -831,8 +861,7 @@ export class Node {
     }
 
     property(name: string): Property | undefined {
-        // use the last found entry (this is the one that counts according to DTS):
-        return this.uniqueProperties().reverse().find(e => e.name === name);
+        return this.uniqueProperties().find(e => e.name === name);
     }
 
     uniqueProperties(): Property[] {
@@ -842,104 +871,366 @@ export class Node {
     }
 }
 
-export class Parser {
+export class DTSCtx {
+    overlays: DTSFile[];
+    board: DTSFile;
     nodes: {[fullPath: string]: Node};
-    root?: Node;
-    private includes: string[];
-    private defines: {[name: string]: string};
-    boardCtx?: DTSCtx;
-    context?: DTSCtx;
-    types: TypeLoader;
+    dirty: vscode.Uri[];
 
-    constructor(defines: {[name: string]: string}, includes: string[], types: TypeLoader) {
+    constructor() {
         this.nodes = {};
-        this.includes = includes;
-        this.defines = defines;
-        this.types = types;
+        this.overlays = [];
+        this.dirty = [];
+    }
+
+    reset() {
+        // Kill all affected files:
+        if (this.dirty.some(uri => this.board?.has(uri))) {
+            this.board.remove();
+        }
+
+        this.overlays
+            .filter(overlay => this.dirty.some(uri => overlay.has(uri)))
+            .forEach(overlay => overlay.remove());
+
+        const removed = { board: this.board, overlays: this.overlays };
+
+        this.board = null;
+        this.overlays = [];
+        this.nodes = {};
+        this.dirty = [];
+
+        return removed;
+    }
+
+    adoptNodes(file: DTSFile) {
+        file.entries.forEach(e => {
+            if (!(e.node.path in this.nodes)) {
+                this.nodes[e.node.path] = e.node;
+            }
+        });
+    }
+
+    isValid() {
+        return this.dirty.length === 0 && !this.board?.dirty && !this.overlays.some(overlay => !overlay || overlay.dirty);
+    }
+
+    node(name: string): Node | null {
+        if (name.startsWith('&{')) {
+            const path = name.match(/^&{(.*)}/);
+            return this.nodes[path?.[1]] ?? null;
+        } else if (name.startsWith('&')) {
+            const ref = name.slice(1);
+            return Object.values(this.nodes).find(n => n.hasLabel(ref)) ?? null;
+        }
+
+        return this.nodes[name] ?? null;
     }
 
     nodeArray() {
-        return Object.keys(this.nodes).map(k => this.nodes[k]);
+        return Object.values(this.nodes);
+    }
+
+    has(uri: vscode.Uri): boolean {
+        return !!this.board.has(uri) || this.overlays.some(o => o.has(uri));
+    }
+
+    getDiags(): DiagnosticsSet {
+        const all = new DiagnosticsSet();
+        this.files.forEach(ctx => all.merge(ctx.diags));
+        return all;
+    }
+
+    getNodeAt(pos: vscode.Position, uri: vscode.Uri): Node {
+        let node: Node;
+        this.files.filter(f => f.has(uri)).find(file => node = file.getNodeAt(pos, uri));
+        return node;
+    }
+
+    getEntryAt(pos: vscode.Position, uri: vscode.Uri): NodeEntry {
+        let entry: NodeEntry;
+        this.files.filter(f => f.has(uri)).find(file => entry = file.getEntryAt(pos, uri));
+        return entry;
+    }
+
+    getPropertyAt(pos: vscode.Position, uri: vscode.Uri): Property {
+        let prop: Property;
+        this.files.filter(f => f.has(uri)).find(file => prop = file.getPropertyAt(pos, uri));
+        return prop;
+    }
+
+    getPHandleNode(handle: number | string): Node {
+        if (typeof handle === 'number') {
+            return this.nodeArray().find(n => n.properties().find(p => p.name === 'phandle' && p.value[0].val === handle));
+        } else if (typeof handle === 'string') {
+            return this.nodeArray().find(n => n.labels().find(p => p === handle));
+        }
+    }
+
+    file(uri: vscode.Uri) {
+        return this.files.find(f => f.has(uri));
+    }
+
+    get files() {
+        if (this.board) {
+            return [this.board, ...this.overlays];
+        }
+
+        return this.overlays;
+    }
+
+    get macros() {
+        const macros = [];
+        if (this.board) {
+            macros.push(...this.board.macros);
+        }
+        this.overlays.forEach(c => macros.push(...c?.macros));
+        return macros;
     }
 
     get roots() {
         const roots = [];
-        this.contexts.forEach(c => roots.push(...c.roots));
+        if (this.board) {
+            roots.push(...this.board.roots);
+        }
+        this.overlays.forEach(c => roots.push(...c?.roots));
         return roots;
     }
 
     get entries() {
         const entries = [];
-        this.contexts.forEach(c => entries.push(...c.entries));
+        if (this.board) {
+            entries.push(...this.board.entries);
+        }
+        this.overlays.forEach(c => entries.push(...c?.entries));
         return entries;
     }
 
-    ctx(uri: vscode.Uri): DTSCtx | undefined {
-        return this.contexts.find(c => c.uri.toString() === uri.toString()) ?? this.contexts.find(c => c.includes.some(i => i.dst.toString() === uri.toString()));
+    get root() {
+        return this.nodes['/'];
     }
 
-    private get contexts(): DTSCtx[] {
-        const ctxs = [];
-        if (this.boardCtx) {
-            ctxs.push(this.boardCtx);
+    get fileCount() {
+        return this.overlays.length + (this.board ? 1 : 0);
+    }
+}
+
+export class Parser {
+    private includes: string[];
+    private defines: {[name: string]: string};
+    private boardPaths: { [board: string]: string };
+    private appCtx: DTSCtx[];
+    private boardCtx: DTSCtx[]; // Raw board contexts, for when the user just opens a .dts or .dtsi file without any overlay
+    private types: TypeLoader;
+    private active=false;
+    private changeEmitter: vscode.EventEmitter<DTSCtx>;
+    onChange: vscode.Event<DTSCtx>;
+    currCtx?: DTSCtx;
+
+    constructor(defines: {[name: string]: string}, includes: string[], types: TypeLoader) {
+        this.includes = includes;
+        this.defines = defines;
+        this.types = types;
+        this.boardPaths = {};
+        this.appCtx = [];
+        this.boardCtx = [];
+        this.changeEmitter = new vscode.EventEmitter();
+        this.onChange = this.changeEmitter.event;
+    }
+
+    file(uri: vscode.Uri) {
+        let file = this.currCtx?.file(uri);
+        if (file) {
+            return file;
         }
 
-        if (this.context) {
-            ctxs.push(this.context);
+        this.contexts.find(ctx => file = ctx.files.find(f => f.has(uri)));
+        return file;
+    }
+
+    ctx(uri: vscode.Uri): DTSCtx {
+        if (this.currCtx?.has(uri)) {
+            return this.currCtx;
         }
 
-        return ctxs;
+        return this.contexts.find(ctx => ctx.has(uri));
     }
 
-    async setBoardFile(uri: vscode.TextDocument) {
-        this.boardCtx = await this.parse(uri, CtxKind.Board);
+    get contexts() {
+        return [...this.appCtx, ...this.boardCtx];
     }
 
-    async setFile(uri: vscode.TextDocument) {
-        this.context = await this.parse(uri, CtxKind.Overlay);
+    private async guessOverlayBoard(uri: vscode.Uri) {
+        const boardName = path.basename(uri.fsPath, '.overlay');
+        // Some generic names are used for .overlay files: These can be ignored.
+        const ignoredNames = ['app', 'dts', 'prj'];
+        let board: string;
+        if (!ignoredNames.includes(boardName)) {
+            board = await zephyr.findBoard(boardName);
+            if (board) {
+                this.boardPaths[boardName] = board;
+                return board;
+            }
+        }
+
+        board = await zephyr.defaultBoard();
+        if (board) {
+            const options = ['Configure default', 'Select a different board'];
+            vscode.window.showInformationMessage(`Using ${path.basename(board, '.dts')} as a default board.`, ...options).then(async e => {
+                if (e === options[0]) {
+                    zephyr.openConfig('devicetree.board');
+                } else if (e === options[1]) {
+                    board = await zephyr.selectBoard();
+                    if (board) {
+                        // TODO: Reload context
+                    }
+                }
+            });
+            return board;
+        }
+
+        // At this point, the user probably didn't set up their repo correctly, but we'll give them a chance to fix it:
+        return await vscode.window.showErrorMessage('DeviceTree: Unable to find board.', 'Select a board').then(e => {
+            if (e) {
+                return zephyr.selectBoard(); // TODO: Reload context instead of blocking?
+            }
+        });
     }
 
-    async onChange(e: vscode.TextDocumentChangeEvent) {
+    private async onDidOpen(doc: vscode.TextDocument) {
+        if (doc.languageId !== 'dts') {
+            return;
+        }
+
+        let ctx = this.ctx(doc.uri);
+        if (ctx) {
+            return ctx;
+        }
+
+        if (path.extname(doc.fileName) === '.overlay') {
+            const boardGuess = await this.guessOverlayBoard(doc.uri);
+            if (!boardGuess) {
+                return;
+            }
+
+            const boardDoc = await vscode.workspace.openTextDocument(boardGuess).then(doc => doc, _ => undefined);
+            if (!boardDoc) {
+                return;
+            }
+
+            const ctx = new DTSCtx();
+
+            ctx.board = await this.parse(ctx, boardDoc);
+            ctx.overlays = [await this.parse(ctx, doc)];
+
+            this.appCtx.push(ctx);
+            this.currCtx = ctx;
+            this.changeEmitter.fire(ctx);
+            return ctx;
+        }
+
+        /* This is a raw board context with no overlays. Should be allowed use language features here, but it's not a proper context. */
+        ctx = this.boardCtx.find(ctx => ctx.has(doc.uri));
+        if (ctx) {
+            return ctx;
+        }
+
+        ctx = new DTSCtx();
+        ctx.board = await this.parse(ctx, doc);
+
+        /* We want to keep the board contexts rid of .dtsi files if we can, as they're not complete.
+         * Remove any .dtsi contexts this board file includes:
+         */
+        if (path.extname(doc.fileName) === '.dts') {
+            this.boardCtx = this.boardCtx.filter(existing => path.extname(existing.board.uri.fsPath) === '.dts' || !ctx.has(existing.board.uri));
+        }
+
+        this.boardCtx.push(ctx);
+        this.currCtx = ctx;
+        this.changeEmitter.fire(ctx);
+        return ctx;
+    }
+
+    /** Reparse after a change.
+     *
+     * When files change, their URI gets registered in each context.
+     * To reparse, we wipe the entries in the changed DTSFiles, and finally wipe the context.
+     * This causes the set of nodes referenced in the unchanged files to be free of entries from the
+     * changed files. For each file that used to be in the context, we either re-add the nodes it held, or
+     * reparse the file (adding any new nodes and their entries). Doing this from the bottom of the
+     * file list makes the context look the same as it did the first time when they're parsed.
+     */
+    private async reparse(ctx: DTSCtx) {
+        const removed = ctx.reset();
+
+        if (removed.board?.dirty) {
+            const doc = await vscode.workspace.openTextDocument(removed.board.uri);
+            ctx.board = await this.parse(ctx, doc);
+        } else {
+            ctx.adoptNodes(removed.board);
+            ctx.board = removed.board;
+        }
+
+        for (const overlay of removed.overlays) {
+            if (overlay.dirty) {
+                const doc = await vscode.workspace.openTextDocument(overlay.uri);
+                ctx.overlays.push(await this.parse(ctx, doc));
+            } else {
+                ctx.adoptNodes(overlay);
+                ctx.overlays.push(overlay);
+            }
+        }
+
+        this.changeEmitter.fire(ctx);
+    }
+
+    private async onDidChange(e: vscode.TextDocumentChangeEvent) {
         if (!e.contentChanges.length) {
             return;
         }
 
-        if (this.boardCtx?.match(e.document.uri)) {
-            this.deleteCtx(this.boardCtx);
-            this.boardCtx = await this.parse(await vscode.workspace.openTextDocument(this.boardCtx.uri), CtxKind.Board);
-        }
+        // Postpone reparsing of other contexts until they're refocused:
+        [...this.appCtx, ...this.boardCtx].filter(ctx => ctx.has(e.document.uri)).forEach(ctx => ctx.dirty.push(e.document.uri)); // TODO: Filter duplicates?
 
-        if (this.context?.match(e.document.uri)) {
-            this.deleteCtx(this.context);
-            this.context = await this.parse(await vscode.workspace.openTextDocument(this.context.uri), CtxKind.Overlay);
+        if (this.currCtx) {
+            this.reparse(this.currCtx);
         }
     }
 
-    private deleteCtx(ctx: DTSCtx) {
-        Object.values(this.nodes).forEach(n => n.entries = n.entries.filter(e => e.ctx.uri.toString() !== ctx.uri.toString()));
-        Object.keys(this.nodes).forEach(k => {
-            if (!this.nodes[k].entries.length) {
-                delete this.nodes[k];
+    private async onDidChangetextEditor(editor?: vscode.TextEditor) {
+        if (editor?.document?.languageId === 'dts') {
+            const ctx = this.ctx(editor.document.uri);
+            if (ctx) {
+                this.currCtx = ctx;
+                if (ctx.dirty.length) {
+                    this.reparse(ctx);
+                }
+
+                return;
             }
-        });
-        ctx.reset();
+
+            this.currCtx = await this.onDidOpen(editor.document);
+        } else {
+            this.currCtx = null;
+        }
     }
 
-    private async parse(doc: vscode.TextDocument, kind: CtxKind): Promise<DTSCtx> {
-        const ctx = new DTSCtx(doc.uri, kind);
-        let macros: Macro[];
-        if (kind !== CtxKind.Board && this.boardCtx) {
-            macros = this.boardCtx.macros.filter(m => !(m instanceof LineMacro) && !(m instanceof CounterMacro) && !(m instanceof FileMacro));
-        } else {
-            macros = Object.keys(this.defines).map(d => new Macro(d, this.defines[d]));
-        }
+    activate(ctx: vscode.ExtensionContext) {
+        // ctx.subscriptions.push(vscode.workspace.onDidOpenTextDocument(doc => notActive(() => this.onDidOpen(doc))));
+        ctx.subscriptions.push(vscode.workspace.onDidChangeTextDocument(doc => this.onDidChange(doc)));
+        ctx.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(e => this.onDidChangetextEditor(e)));
 
-        const preprocessed = await preprocess(doc, macros, this.includes, ctx.diags);
-        const state = new ParserState(doc.uri, ctx.diags, ...preprocessed);
+        vscode.window.visibleTextEditors.forEach(e => this.onDidOpen(e.document));
+    }
 
-        ctx.includes = state.includes;
-        ctx.lines = state.lines;
-        ctx.macros.push(...state.macros);
+    private async parse(ctx: DTSCtx, doc: vscode.TextDocument): Promise<DTSFile> {
+        const file = new DTSFile(doc.uri, ctx);
+        const preprocessed = await preprocess(doc, ctx.macros, this.includes, file.diags);
+        const state = new ParserState(doc.uri, file.diags, ...preprocessed);
+
+        file.includes = state.includes;
+        file.lines = state.lines;
+        file.macros = state.macros;
         let entries = 0;
         const timeStart = process.hrtime();
         const nodeStack: NodeEntry[] = [];
@@ -983,20 +1274,20 @@ export class Parser {
                         nodeMatch[1],
                         nodeStack.length > 0 ? nodeStack[nodeStack.length - 1].node : undefined);
 
-                    if (this.nodes[node.path]) {
-                        node = this.nodes[node.path];
+                    if (ctx.nodes[node.path]) {
+                        node = ctx.nodes[node.path];
                     } else {
-                        this.nodes[node.path] = node;
+                        ctx.nodes[node.path] = node;
                     }
 
-                    const entry = new NodeEntry(nameLoc, node, nameLoc, ctx, entries++);
+                    const entry = new NodeEntry(nameLoc, node, nameLoc, file, entries++);
 
                     entry.labels.push(...labels);
                     node.entries.push(entry);
-                    ctx.entries.push(entry);
+                    file.entries.push(entry);
 
                     if (nodeStack.length === 0) {
-                        ctx.roots.push(entry);
+                        file.roots.push(entry);
                     } else {
                         nodeStack[nodeStack.length - 1].children.push(entry);
                         entry.parent = nodeStack[nodeStack.length - 1];
@@ -1018,7 +1309,7 @@ export class Parser {
                 const hasPropValue = state.match(/^=/);
                 if (hasPropValue) {
                     if (nodeStack.length > 0) {
-                        const p = new Property(name[0], nameLoc, state, labels);
+                        const p = new Property(name[0], nameLoc, state, nodeStack[nodeStack.length - 1], labels);
                         nodeStack[nodeStack.length - 1].properties.push(p);
                     } else {
                         state.pushDiag('Property outside of node context', vscode.DiagnosticSeverity.Error, nameLoc);
@@ -1029,7 +1320,7 @@ export class Parser {
                 }
 
                 if (nodeStack.length > 0) {
-                    const p = new Property(name[0], nameLoc, state, labels);
+                    const p = new Property(name[0], nameLoc, state, nodeStack[nodeStack.length - 1], labels);
                     nodeStack[nodeStack.length - 1].properties.push(p);
                     labels = [];
                     continue;
@@ -1050,21 +1341,21 @@ export class Parser {
                     continue;
                 }
 
-                let node = this.getNode(refMatch[1]);
+                let node = ctx.node(refMatch[1]);
                 if (!node) {
                     state.pushDiag('Unknown label', vscode.DiagnosticSeverity.Error, refLoc);
                     node = new Node(refMatch[1]);
                 }
 
-                const entry = new NodeEntry(refLoc, node, refLoc, ctx, entries++);
+                const entry = new NodeEntry(refLoc, node, refLoc, file, entries++);
                 entry.labels.push(...labels);
                 node.entries.push(entry);
                 entry.ref = refMatch[1];
                 if (nodeStack.length === 0) {
-                    ctx.roots.push(entry);
+                    file.roots.push(entry);
                 }
 
-                ctx.entries.push(entry);
+                file.entries.push(entry);
                 nodeStack.push(entry);
                 labels = [];
                 continue;
@@ -1086,13 +1377,13 @@ export class Parser {
                 state.skipWhitespace();
                 requireSemicolon = true;
 
-                const node = state.match(/^(&?)([\w,._+-]+)/);
+                const node = state.match(/^&?[\w,.+/-]+/);
                 if (!node) {
                     state.pushDiag(`Expected node`);
                     continue;
                 }
 
-                const n = this.nodeArray().find(n => (node[1] ? (n.labels().indexOf(node[2]) !== -1) : (node[2] === n.name)));
+                const n = ctx.node(node[0]);
                 if (n) {
                     n.deleted = true;
                 } else {
@@ -1132,14 +1423,13 @@ export class Parser {
 
             const rootMatch = state.match(/^\/\s*{/);
             if (rootMatch) {
-                if (!this.root) {
-                    this.root = new Node('/');
-                    this.nodes['/'] = this.root;
+                if (!ctx.root) {
+                    ctx.nodes['/'] = new Node('');
                 }
-                const entry = new NodeEntry(state.location(), this.root, new vscode.Location(state.location().uri, state.location().range.start), ctx, entries++);
-                this.root.entries.push(entry);
-                ctx.roots.push(entry);
-                ctx.entries.push(entry);
+                const entry = new NodeEntry(state.location(), ctx.root, new vscode.Location(state.location().uri, state.location().range.start), file, entries++);
+                ctx.root.entries.push(entry);
+                file.roots.push(entry);
+                file.entries.push(entry);
                 nodeStack.push(entry);
                 continue;
             }
@@ -1175,65 +1465,15 @@ export class Parser {
         const procTime = process.hrtime(timeStart);
 
         console.log(`Parsed ${doc.uri.fsPath} in ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
-        this.resolveTypes(ctx);
-        console.log(`Nodes: ${Object.keys(this.nodes).length} entries: ${Object.values(this.nodes).reduce((sum, n) => sum + n.entries.length, 0)}`);
-        return Promise.resolve(ctx);
-    }
+        console.log(`Nodes: ${Object.keys(ctx.nodes).length} entries: ${Object.values(ctx.nodes).reduce((sum, n) => sum + n.entries.length, 0)}`);
 
-    resolveTypes(ctx: DTSCtx) {
+        // Resolve types:
         let time = process.hrtime();
         ctx.entries.forEach(e => e.node.type = (this.types.nodeType(e.node) ?? this.types.types['base']?.[0]));
         time = process.hrtime(time);
-        console.log(`Resolved types for ${ctx.uri.fsPath} in ${(time[0] * 1e9 + time[1]) / 1000000} ms`);
-    }
+        console.log(`Resolved types for ${file.uri.fsPath} in ${(time[0] * 1e9 + time[1]) / 1000000} ms`);
 
-    getDiags(): DiagnosticsSet {
-        const all = new DiagnosticsSet();
-        this.contexts.forEach(ctx => all.merge(ctx.diags));
-        return all;
-    }
-
-    getNode(search: string): Node | undefined {
-        if (search.startsWith('&')) {
-            const label = search.slice(1);
-            const node = this.nodeArray().find(n => n.labels().indexOf(label) !== -1);
-            if (node) {
-                return this.nodes[node.path];
-            }
-        }
-
-        if (search.endsWith('/')) {
-            return this.nodes[search];
-        }
-
-        return this.nodes[search + '/'];
-    }
-
-    getNodeAt(pos: vscode.Position, uri: vscode.Uri): Node | undefined {
-        const allNodes = this.nodeArray().filter(n => n.entries.find(e => e.loc.uri.fsPath === uri.fsPath && e.loc.range.contains(pos)));
-        if (allNodes.length === 0) {
-            return undefined;
-        }
-        /* When multiple nodes are matching, they extend each other,
-         * and the one with the longest path is the innermost child.
-         */
-        return allNodes.sort((a, b) => b.path.length - a.path.length)[0];
-    }
-
-    getPropertyAt(pos: vscode.Position, uri: vscode.Uri): [Node, Property] | undefined {
-        const node = this.getNodeAt(pos, uri);
-        const prop = node?.properties().find(p => p.loc.uri.fsPath === uri.fsPath && p.fullRange.contains(pos));
-        if (prop) {
-            return [node, prop];
-        }
-    }
-
-    getPHandleNode(handle: number | string): Node {
-        if (typeof handle === 'number') {
-            return this.nodeArray().find(n => n.properties().find(p => p.name === 'phandle' && p.value[0].val === handle));
-        } else if (typeof handle === 'string') {
-            return this.nodeArray().find(n => n.labels().find(p => p === handle));
-        }
+        return file;
     }
 }
 

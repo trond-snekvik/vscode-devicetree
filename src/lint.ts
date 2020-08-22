@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
-import { Parser, getCells, getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, StringValue, BoolValue, BytestringValue } from './dts';
+import { Parser, getCells, getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, StringValue, BoolValue, BytestringValue, DTSCtx } from './dts';
 import * as types from './types';
 import { DiagnosticsSet } from './diags';
 
-export type LintCtx = { parser: Parser, types: types.TypeLoader, diags: DiagnosticsSet };
+export type LintCtx = { ctx: DTSCtx, types: types.TypeLoader, diags: DiagnosticsSet };
 
 function lintNode(node: Node, ctx: LintCtx) {
     const props = node.uniqueProperties();
@@ -124,7 +124,7 @@ function lintNode(node: Node, ctx: LintCtx) {
                     return;
                 }
 
-                const outputNode = ctx.parser.getNode(outputRef.val);
+                const outputNode = ctx.ctx.node(outputRef.val);
                 if (!outputNode) {
                     return; // Already generates a warning in the general PHandle check
                 }
@@ -218,7 +218,7 @@ function lintNode(node: Node, ctx: LintCtx) {
                 const val = p.pHandle?.val ?? p.string;
                 if (!val) {
                     ctx.diags.pushLoc(p.loc, `Properties in ${node.name} must be references to nodes`, vscode.DiagnosticSeverity.Error);
-                } else if (!ctx.parser.getNode(val)) {
+                } else if (!ctx.ctx.node(val)) {
                     ctx.diags.pushLoc(p.loc, `Unknown reference to ${val.toString()}`, vscode.DiagnosticSeverity.Error);
                 }
             }));
@@ -311,7 +311,7 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
                     return;
                 }
 
-                const ref = ctx.parser.getNode(e.val);
+                const ref = ctx.ctx.node(e.val);
                 if (!ref) {
                     ctx.diags.pushLoc(e.loc, `Unknown label`);
                 } else {
@@ -338,7 +338,7 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
         });
 
         prop.value.filter(v => v instanceof PHandle).forEach((v: PHandle) => {
-            if ((v instanceof PHandle) && !ctx.parser.getNode(v.val)) {
+            if ((v instanceof PHandle) && !ctx.ctx.node(v.val)) {
                 ctx.diags.pushLoc(v.loc, `Unknown path label`);
             }
         });
@@ -411,6 +411,6 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
 }
 
 export function lint(ctx: LintCtx) {
-    ctx.parser.entries.forEach(e => lintEntry(e, ctx));
-    Object.values(ctx.parser.nodes).forEach(n => lintNode(n, ctx));
+    ctx.ctx.entries.forEach(e => lintEntry(e, ctx));
+    Object.values(ctx.ctx.nodes).forEach(n => lintNode(n, ctx));
 }

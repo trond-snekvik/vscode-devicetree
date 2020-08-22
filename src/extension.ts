@@ -2,6 +2,7 @@
 import * as vscode from 'vscode';
 import * as dts from './dts';
 import * as types from './types';
+import * as zephyr from './zephyr';
 import {lint, LintCtx} from './lint';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -20,79 +21,24 @@ function getConfig(variable: string) {
 
 function getBindingDirs(): string[] {
     const dirs = getConfig('bindings') as string[];
-    const paths = [];
-    dirs.forEach(d => {
-        const variable = d.match(/^\${(workspaceFolder)(?::(.+?))}/);
-        if (variable) {
-            if (!vscode.workspace.workspaceFolders) {
-                paths.push(vscode.env.appRoot);
-                return;
+    return dirs.map(d => {
+        return d.replace(/\${(.*?)}/g, (original, name: string) => {
+            if (name === 'workspaceFolder') {
+                return vscode.workspace.workspaceFolders?.[0].uri.fsPath ?? vscode.env.appRoot;
             }
 
-            if (variable[2]) {
-                paths.push(...vscode.workspace.workspaceFolders.filter(f => f.name === variable[2]).map(w => d.replace(variable[0], w.uri.fsPath)));
-                return;
-            }
-        }
-
-        if (path.isAbsolute(d)) {
-            paths.push(d);
-        } else if (vscode.workspace.workspaceFolders) {
-            paths.push(...vscode.workspace.workspaceFolders.map(w => path.resolve(w.uri.fsPath, d)));
-        }
-    });
-
-    return paths;
-}
-
-function getBoardFile(): string {
-    let boardFile: string;
-    boardFile = getConfig('devicetree.boardFile') as string;
-    if (!boardFile) {
-        const kconfigBoard = getConfig('kconfig.zephyr.board');
-        if (kconfigBoard && kconfigBoard['dir'] && kconfigBoard['board']) {
-            boardFile = kconfigBoard['dir'] + path.sep + kconfigBoard['board'] + '.dts';
-        }
-    }
-
-    if (!boardFile) {
-        boardFile = '${ZEPHYR_BASE}/boards/arm/nrf52dk_nrf52832/nrf52dk_nrf52832.dts';
-    }
-
-    return path.resolve(vscode.workspace.workspaceFolders[0]?.uri.fsPath ?? '.', boardFile.replace(/\${(.+?)}/g, (fullMatch: string, variable: string) => {
-            if (variable.startsWith('workspaceFolder')) {
-                if (vscode.workspace.workspaceFolders.length === 0) {
-                    return '';
-                }
-
-                const parts = variable.split(':');
-                const workspace = vscode.workspace.workspaceFolders.find(f => parts.length === 1 || f.name === parts[1]);
-                return workspace ? workspace.uri.fsPath : '';
+            if (name.startsWith('workspaceFolder:')) {
+                const folder = name.split(':')[1];
+                return vscode.workspace.workspaceFolders.find(w => w.name === folder)?.uri.fsPath ?? original;
             }
 
-            if (['file', 'relativeFile', 'relativeFileDirname', 'fileDirname'].indexOf(variable) >= 0 &&
-                vscode.window.activeTextEditor &&
-                vscode.window.activeTextEditor.document) {
-                return vscode.window.activeTextEditor.document.uri.fsPath.replace(/[^/\\]+$/, '');
+            if (['zephyr_base', 'zephyrbase'].includes(name.toLowerCase())) {
+                return zephyr.zephyrRoot ?? original;
             }
 
-            if (variable in process.env) {
-                return process.env[variable];
-            }
-
-            if (variable === 'ZEPHYR_BASE') {
-                const options = { cwd: vscode.workspace.workspaceFolders[0]?.uri.fsPath };
-                try {
-                    const topdir = execSync('west topdir', options).toString('utf-8');
-                    const zephyrBase = execSync('west config zephyr.base', options).toString('utf-8');
-                    return topdir.trim() + path.sep + zephyrBase.trim();
-                } catch (e) {
-                    /* Ignore */
-                }
-            }
-
-            return '';
-    }));
+            return original;
+        });
+    }).map(path.normalize);
 }
 
 function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString, node?: dts.Node) {
@@ -192,7 +138,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
     types: types.TypeLoader;
     prevDiagUris: vscode.Uri[] = [];
 
-    constructor(context: vscode.ExtensionContext) {
+    constructor() {
         this.diags = vscode.languages.createDiagnosticCollection('DeviceTree');
         this.types = new types.TypeLoader();
 
@@ -207,31 +153,52 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             vscode.workspace.workspaceFolders.map(w => ['include', 'dts/common', 'dts/arm', 'dts'].map(i => w.uri.fsPath + '/' + i)).reduce((arr, elem) => [...arr, ...elem], []);
 
         this.parser = new dts.Parser(defines, includes, this.types);
-
-        this.parseBoardFile().then(() => {
-            if (vscode.window.activeTextEditor) {
-                this.setDoc(vscode.window.activeTextEditor.document);
-            }
-        });
-
-        context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(async editor => {
-            if (editor?.document) {
-                await this.setDoc(editor.document);
-            }
-        }));
-        context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(async change => {
-            await this.parser.onChange(change);
+        this.parser.onChange(ctx => {
             const lintCtx: LintCtx =  {
                 diags: new DiagnosticsSet(),
-                parser: this.parser,
                 types: this.types,
+                ctx,
             };
 
             lint(lintCtx);
-            const diags = this.parser.getDiags();
+            const diags = ctx.getDiags();
             diags.merge(lintCtx.diags);
             this.setDiags(diags);
-        }));
+        });
+    }
+
+    activate(ctx: vscode.ExtensionContext) {
+        const selector = <vscode.DocumentFilter>{ language: 'dts', scheme: 'file' };
+        let disposable = vscode.languages.registerDocumentSymbolProvider(selector, this);
+        ctx.subscriptions.push(disposable);
+        disposable = vscode.languages.registerDefinitionProvider([selector, <vscode.DocumentFilter>{ language: 'yaml', scheme: 'file' }], this);
+        ctx.subscriptions.push(disposable);
+        disposable = vscode.languages.registerHoverProvider(selector, this);
+        ctx.subscriptions.push(disposable);
+        disposable = vscode.languages.registerCompletionItemProvider(selector, this, '&', '#', '<', '"', '\t');
+        ctx.subscriptions.push(disposable);
+        disposable = vscode.languages.registerSignatureHelpProvider(selector, this, '<', ' ');
+        ctx.subscriptions.push(disposable);
+        disposable = vscode.languages.registerDocumentRangeFormattingEditProvider(selector, this);
+        ctx.subscriptions.push(disposable);
+        disposable = vscode.languages.registerDocumentLinkProvider(selector, this);
+
+        vscode.languages.setLanguageConfiguration('dts',
+            <vscode.LanguageConfiguration>{
+                wordPattern: /(0x[a-fA-F\d]+|-?\d+|&?[#\w,-]+)/,
+                comments: {
+                    blockComment: ['/*', '*/'],
+                    lineComment: '//'
+                },
+                indentationRules: { increaseIndentPattern: /{/, decreaseIndentPattern: /}/ },
+                brackets: [
+                    ['<', '>'],
+                    ['{', '}'],
+                    ['[', ']'],
+                ]
+            });
+
+        this.parser.activate(ctx);
     }
 
     private setDiags(diags: DiagnosticsSet) {
@@ -249,39 +216,6 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         const snippet = new vscode.SnippetString(`\n${indent}${propType.name} = `);
         appendPropSnippet(propType, snippet, entry.node);
         vscode.window.activeTextEditor.insertSnippet(snippet, new vscode.Position(line - 1, 99999999));
-    }
-
-    private async parseBoardFile() {
-        const boardFile = getBoardFile();
-        if (fs.existsSync(boardFile)) {
-            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(boardFile));
-            await this.parser.setBoardFile(doc);
-            const diags = this.parser.getDiags();
-            diags.all.forEach(d => this.diags.set(d.uri, d.diags));
-        } else {
-            vscode.window.showErrorMessage(`Unable to open DeviceTree board file ${boardFile}.`, 'Configure...').then(() => {
-                vscode.commands.executeCommand('workbench.action.openSettings', 'deviceTree.boardFile');
-            });
-        }
-    }
-
-    async setDoc(doc: vscode.TextDocument) {
-        if (doc.languageId !== 'dts' || this.parser.ctx(doc.uri)) {
-            return;
-        }
-
-        await this.parser.setFile(doc);
-
-        const lintCtx: LintCtx =  {
-            diags: new DiagnosticsSet(),
-            parser: this.parser,
-            types: this.types,
-        };
-
-        lint(lintCtx);
-        const diags = this.parser.getDiags();
-        diags.merge(lintCtx.diags);
-        this.setDiags(diags);
     }
 
     provideDocumentSymbols(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.SymbolInformation[]> {
@@ -316,7 +250,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                 return;
             }
 
-            const node = new vscode.SymbolInformation(e.node.fullName, vscode.SymbolKind.Class, e.parent?.node?.fullName, e.loc);
+            const node = new vscode.SymbolInformation(e.node.fullName || '/', vscode.SymbolKind.Class, e.parent?.node?.fullName, e.loc);
             symbols.push(node);
             symbols.push(...e.properties.map(p => new vscode.SymbolInformation(p.name, propSymbolKind(p), e.node.fullName, p.loc)));
             e.children.forEach(addSymbol);
@@ -326,12 +260,12 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         return symbols;
     }
 
-    getNodeDefinition(document: vscode.TextDocument, position: vscode.Position): [vscode.Range, dts.Node] | undefined {
+    getNodeDefinition(ctx: dts.DTSCtx, document: vscode.TextDocument, position: vscode.Position): [vscode.Range, dts.Node] {
         let word = document.getWordRangeAtPosition(position, /&[\w-]+/);
         if (word) {
             const symbol = document.getText(word);
             if (symbol.startsWith('&')) { // label
-                const node = this.parser.getNode(symbol);
+                const node = ctx.node(symbol);
                 if (node) {
                     return [word, node];
                 }
@@ -344,13 +278,13 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
             if (symbol) {
                 symbol = symbol.slice(1, symbol.length - 1);
-                const property = this.parser.getPropertyAt(position, document.uri);
-                if (!property) {
+                const prop = ctx.getPropertyAt(position, document.uri);
+                if (!prop) {
                     return;
                 }
 
-                if (property[0].name === 'aliases' || property[0].name === 'chosen') { // the string should be a path
-                    const node = this.parser.getNode(symbol);
+                if (prop.entry.node.name === 'aliases' || prop.entry.node.name === 'chosen') { // the string should be a path
+                    const node = ctx.node(symbol);
                     if (!node) {
                         return;
                     }
@@ -362,7 +296,12 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
     }
 
     provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Hover> {
-        const line = this.parser.ctx(document.uri)?.lines.find(l => l.uri.fsPath === document.uri.fsPath && l.number === position.line);
+        const file = this.parser.file(document.uri);
+        if (!file) {
+            return;
+        }
+
+        const line = file.lines.find(l => l.uri.fsPath === document.uri.fsPath && l.number === position.line);
         if (line) {
             const m = line.macros.find(m => position.character >= m.start && position.character < m.start + m.raw.length);
             if (m) {
@@ -370,8 +309,8 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             }
         }
 
-        // hover alias
-        const bundle = this.getNodeDefinition(document, position);
+        // hover reference
+        const bundle = this.getNodeDefinition(file.ctx, document, position);
         if (bundle) {
             const node = bundle[1];
 
@@ -386,7 +325,12 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             }, new Array<dts.Node>()).map(c => `\n\t${c.fullName} { /* ... */ };`).join('');
             expanded += '\n};';
 
-            return new vscode.Hover([new vscode.MarkdownString('`' + node.path + '`'), {language: 'dts', value: expanded}], bundle[0]);
+            const name = new vscode.MarkdownString('`' + node.path + '`');
+            if (!node.type.invalid) {
+                name.appendText(' (' + node.type.description + ')');
+            }
+
+            return new vscode.Hover([name, {language: 'dts', value: expanded}], bundle[0]);
         }
 
         // hover property name
@@ -394,11 +338,13 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         if (!word) {
             return;
         }
+
         const symbol = document.getText(word);
-        const node = this.parser.getNodeAt(position, document.uri);
+        const node = file.getNodeAt(position, document.uri);
         if (!node) {
             return;
         }
+
         const type = this.types.nodeType(node);
         const prop = type.properties.find(p => p.name === symbol);
         if (prop) {
@@ -427,6 +373,11 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
     }
 
     provideDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Definition> {
+        const file = this.parser.file(document.uri);
+        if (!file) {
+            return;
+        }
+
         if (document.languageId === 'yaml') {
             const range = document.getWordRangeAtPosition(position, /[\w.,-]+\.ya?ml/);
             const text = document.getText(range);
@@ -436,7 +387,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             return [];
         }
 
-        const line = this.parser.ctx(document.uri)?.lines.find(l => l.uri.fsPath === document.uri.fsPath && l.number === position.line);
+        const line = file.lines.find(l => l.uri.fsPath === document.uri.fsPath && l.number === position.line);
         if (line) {
             const m = line.macros.find(m => position.character >= m.start && position.character < m.start + m.raw.length);
             if (m) {
@@ -444,7 +395,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             }
         }
 
-        const bundle = this.getNodeDefinition(document, position);
+        const bundle = this.getNodeDefinition(file.ctx, document, position);
         if (bundle) {
             return bundle[1].entries
                 .filter(e => !e.loc.range.contains(position))
@@ -459,13 +410,13 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
         if (symbol) {
             symbol = symbol.slice(1, symbol.length - 1);
-            const property = this.parser.getPropertyAt(position, document.uri);
-            if (!property) {
+            const prop = file.ctx.getPropertyAt(position, document.uri);
+            if (!prop) {
                 return;
             }
 
-            if (property[1].name === 'compatible') {
-                const type = this.types.nodeType(property[0]);
+            if (prop.name === 'compatible') {
+                const type = prop.entry.node.type;
                 if (type && type.filename.length > 0) {
                     return new vscode.Location(vscode.Uri.file(type.filename), new vscode.Position(0, 0));
                 }
@@ -475,7 +426,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
     resolveCompletionItem?(item: vscode.CompletionItem, token: vscode.CancellationToken): vscode.ProviderResult<vscode.CompletionItem> {
         if (item.kind === vscode.CompletionItemKind.Class) {
-            const node = this.parser.getNode(item.label);
+            const node = this.parser.currCtx?.node(item.label);
             if (node) {
                 const type = this.types.nodeType(node);
                 if (type) {
@@ -490,7 +441,11 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
     }
 
     provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.CompletionContext): vscode.ProviderResult<vscode.CompletionItem[] | vscode.CompletionList> {
-        const node = this.parser.getNodeAt(position, document.uri);
+        const file = this.parser.file(document.uri);
+        if (!file) {
+            return;
+        }
+        const node = file.ctx.getNodeAt(position, document.uri);
 
         const lineRange = new vscode.Range(position.line, 0, position.line, 999999);
         const line = document.getText(lineRange);
@@ -498,7 +453,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
         const labelItems = (asNode: boolean) => {
             const labels: {label: string, node: dts.Node, type?: types.NodeType}[] = [];
-            Object.values(this.parser.nodes).forEach(node => {
+            file.ctx.nodeArray().forEach(node => {
                 const type = this.types.nodeType(node);
                 labels.push(...node.labels().map(label => { return { label, node, type }; }));
             });
@@ -592,10 +547,8 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             }
         };
 
-        const type = this.types.nodeType(node);
-
-        const property = this.parser.getPropertyAt(position, document.uri);
-        if (property) {
+        const prop = file.getPropertyAt(position, document.uri);
+        if (prop) {
             if (before.includes('=')) {
                 const after = line.slice(position.character);
                 const surroundingBraces = [['<', '>'], ['"', '"'], ['[', ']']];
@@ -610,7 +563,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                 }
 
                 const range = new vscode.Range(position.line, start, position.line, end);
-                const propType = (type && type.properties.find(p => p.name === property[1].name));
+                const propType = (node.type?.properties.find(p => p.name === prop.name));
                 if (propType) {
                     if (propType.enum) {
                         const filterText = document.getText(document.getWordRangeAtPosition(position));
@@ -639,7 +592,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                     return labelItems(false);
                 }
 
-                if (property[1].name === 'compatible') {
+                if (prop.name === 'compatible') {
                     return Object.keys(this.types.types).filter(t => !t.startsWith('/')).map(typename => this.types.types[typename].map(type => {
                             const completion = new vscode.CompletionItem(typename, vscode.CompletionItemKind.EnumMember);
                             completion.range = range;
@@ -667,12 +620,12 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
         const nodeProps = node.properties();
 
-        let props = type.properties;
+        let typeProps = node.type?.properties ?? [];
         if (!document.getWordRangeAtPosition(position)) {
-            props = props.filter(p => (p.name !== '#size-cells') && (p.name !== '#address-cells') && p.isLoaded && !nodeProps.find(pp => pp.name === p.name));
+            typeProps = typeProps.filter(p => (p.name !== '#size-cells') && (p.name !== '#address-cells') && p.isLoaded && !nodeProps.find(pp => pp.name === p.name));
         }
 
-        const propCompletions = props
+        const propCompletions = typeProps
             .map(p => {
                 const completion = new vscode.CompletionItem(p.name, vscode.CompletionItemKind.Property);
                 completion.detail = Array.isArray(p.type) ? p.type[0] : p.type;
@@ -687,25 +640,25 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             });
 
         let nodes: types.NodeType[] = [];
-        if (type['bus']) {
+        if (node.type?.['bus']) {
             nodes = Object.values(this.types.types)
                 .filter(n => n[0].name !== '/')
                 .reduce((all, n) => [...all, ...n], [])
-                .filter(n => n.loaded && n['on-bus'] === type['bus']);
+                .filter(n => n.loaded && n['on-bus'] === node.type['bus']);
         }
 
         nodes = nodes.filter(n => !n.name.startsWith('/') || n.name.startsWith(node.name));
 
-        if (type['child-binding']) {
-            nodes.push(type['child-binding']);
+        if (node.type?.['child-binding']) {
+            nodes.push(node.type['child-binding']);
         }
 
         const anyNode = new vscode.CompletionItem('node', vscode.CompletionItemKind.Class);
         anyNode.insertText = new vscode.SnippetString();
         anyNode.insertText.appendPlaceholder('node-name');
-        if (type && type["child-binding"]) {
+        if (node.type?.["child-binding"]) {
             anyNode.insertText.appendText(' {\n');
-            type['child-binding'].properties.filter(p => p.required || p.name === 'status').forEach(p => {
+            node.type['child-binding'].properties.filter(p => p.required || p.name === 'status').forEach(p => {
                 (<vscode.SnippetString>anyNode.insertText).appendText(`\t`);
                 appendPropSnippet(p, <vscode.SnippetString>anyNode.insertText); // todo: This new node's parent is `node`, how to address?
                 (<vscode.SnippetString>anyNode.insertText).appendText(`\n`);
@@ -758,11 +711,17 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
     }
 
     provideSignatureHelp(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.SignatureHelpContext): vscode.ProviderResult<vscode.SignatureHelp> {
-        const [node, prop] = this.parser.getPropertyAt(position, document.uri) ?? [undefined, undefined];
+        const ctx = this.parser.ctx(document.uri);
+        if (!ctx) {
+            return;
+        }
+
+        const prop = ctx.getPropertyAt(position, document.uri);
         if (!prop) {
             return;
         }
 
+        const node = prop.entry.node;
         if (!node.type) {
             return;
         }
@@ -806,7 +765,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             params = cells;
         } else if (propType.type === 'phandle-array') {
             let ref : dts.Node;
-            if (entry.length > 0 && (entry.val[0] instanceof dts.PHandle) && (ref = this.parser.getNode(entry.val[0].val))) {
+            if (entry.length > 0 && (entry.val[0] instanceof dts.PHandle) && (ref = ctx.node(entry.val[0].val))) {
                 const cellNames = ref.type?.[dts.cellName(prop.name)];
                 if (cellNames) {
                     params = [entry.val[0].val, ...cellNames];
@@ -913,9 +872,8 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         return [new vscode.TextEdit(range, text)];
     }
 
-
     provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.DocumentLink[]> {
-        return this.parser.ctx(document.uri)?.includes.filter(i => i.loc.uri.fsPath === document.uri.fsPath).map(i => {
+        return this.parser.file(document.uri)?.includes.filter(i => i.loc.uri.fsPath === document.uri.fsPath).map(i => {
             const link = new vscode.DocumentLink(i.loc.range, i.dst);
             link.tooltip = i.dst.fsPath;
             return link;
@@ -923,37 +881,11 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
     }
 }
 
-export function activate(context: vscode.ExtensionContext) {
-    const engine = new DTSEngine(context);
-    const selector = <vscode.DocumentFilter>{ language: 'dts', scheme: 'file' };
-    let disposable = vscode.languages.registerDocumentSymbolProvider(selector, engine);
-    context.subscriptions.push(disposable);
-    disposable = vscode.languages.registerDefinitionProvider([selector, <vscode.DocumentFilter>{ language: 'yaml', scheme: 'file' }], engine);
-    context.subscriptions.push(disposable);
-    disposable = vscode.languages.registerHoverProvider(selector, engine);
-    context.subscriptions.push(disposable);
-    disposable = vscode.languages.registerCompletionItemProvider(selector, engine, '&', '#', '<', '"', '\t');
-    context.subscriptions.push(disposable);
-    disposable = vscode.languages.registerSignatureHelpProvider(selector, engine, '<', ' ');
-    context.subscriptions.push(disposable);
-    disposable = vscode.languages.registerDocumentRangeFormattingEditProvider(selector, engine);
-    context.subscriptions.push(disposable);
-    disposable = vscode.languages.registerDocumentLinkProvider(selector, engine);
+export async function activate(context: vscode.ExtensionContext) {
+    await zephyr.activate(context);
 
-    vscode.languages.setLanguageConfiguration('dts',
-        <vscode.LanguageConfiguration>{
-            wordPattern: /(0x[a-fA-F\d]+|-?\d+|&?[#\w\-,]+)/,
-            comments: {
-                blockComment: ['/*', '*/'],
-                lineComment: '//'
-            },
-            indentationRules: { increaseIndentPattern: /{/, decreaseIndentPattern: /}/ },
-            brackets: [
-                ['<', '>'],
-                ['{', '}'],
-                ['[', ']'],
-            ]
-        });
+    const engine = new DTSEngine();
+    engine.activate(context);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function

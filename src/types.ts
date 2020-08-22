@@ -26,6 +26,7 @@ export interface NodeType {
     properties: PropertyType[];
     filename: string;
     title?: string;
+    invalid?: boolean;
     include?: string | string[];
     description?: string;
     'bus'?: string;
@@ -70,7 +71,7 @@ const standardProperties: PropertyType[] = [
         name: 'status',
         type: 'string',
         required: false,
-        enum: ['okay', 'disabled', 'reserved', 'fail', 'fail-sss'],
+        enum: ['okay', 'disabled'],
         description: 'The status property indicates the operational status of a device.',
         isLoaded: true, // This is a lie, but it forces the property to show as a completion item
     },
@@ -466,7 +467,7 @@ export class TypeLoader {
 
 
     nodeType(node: Node): NodeType {
-        const props = node.properties();
+        const props = node.uniqueProperties();
 
         const getBaseType = () => {
             const candidates = [node.path];
@@ -502,7 +503,7 @@ export class TypeLoader {
         let types = getBaseType();
 
         if (!types.length) {
-            types = [{ name: '<unknown>', filename: '', loaded: true, properties: [ ...standardProperties ] }];
+            types = [{ name: '<unknown>', filename: '', invalid: true, loaded: true, properties: [ ...standardProperties ] }];
         }
 
         if (props.find(p => p.name === 'interrupt-controller')) {

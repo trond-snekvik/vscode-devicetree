@@ -5,5 +5,7 @@
     },
     "search.exclude": {
         "out": true // set this to false to include "out" folder in search results
-    }
+    },
+    "eslint.format.enable": true,
+    "eslint.lintTask.enable": true,
 }

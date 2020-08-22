@@ -31,7 +31,7 @@ export interface NodeType {
     'bus'?: string;
     'on-bus'?: string;
     'child-binding'?: NodeType;
-};
+}
 
 
 const standardProperties: PropertyType[] = [
@@ -90,7 +90,7 @@ const standardProperties: PropertyType[] = [
         'is calculated by using following formula: “registers address” << reg-shift. If unspecified, the default\n' +
         'value is 0.\n' +
         'For example, in a system where 16540 UART registers are located at addresses 0x0, 0x4, 0x8, 0xC,\n' +
-        '0x10, 0x14, 0x18, and 0x1C, a reg-shift = \<2\> property would be used to specify register\n' +
+        '0x10, 0x14, 0x18, and 0x1C, a reg-shift = \\<2\\> property would be used to specify register\n' +
         'locations.`\n',
     },
     {
@@ -170,21 +170,21 @@ function mergeProperties(base: PropertyType[], inherited: PropertyType[]): Prope
     return [
         ...inherited.filter(p => !base.find(bp => bp.name === p.name)),
         ...base.map(p => {
-            var i = inherited.find(i => i.name === p.name);
+            const i = inherited.find(i => i.name === p.name);
             return { ...i, ...p, required: i?.required || p?.required};
         }),
     ];
-};
+}
 
 function filterDuplicateProps(props: PropertyType[]): PropertyType[] {
-    var uniqueProps = props.filter((p, i) => props.findIndex(pp => p.name === pp.name) === i);
+    const uniqueProps = props.filter((p, i) => props.findIndex(pp => p.name === pp.name) === i);
 
     return uniqueProps.map(p => {
         props.filter(pp => pp.name === p.name).forEach(pp => {
             p = {...p, ...pp};
         });
         return p;
-    })
+    });
 }
 
 export class TypeLoader {
@@ -389,7 +389,7 @@ export class TypeLoader {
 
     addFolder(folder: string) {
         this.folders.push(folder);
-        var files = glob.sync('**/*.yaml', { cwd: folder });
+        const files = glob.sync('**/*.yaml', { cwd: folder });
         files.forEach(f => {
             const name = typeNameFromFile(path.resolve(folder, f));
             if (!(name in this.types)) {
@@ -411,11 +411,11 @@ export class TypeLoader {
     }
 
     YAMLtoNode(tree: any, baseType?: NodeType): NodeType {
-        var loadedProperties: PropertyType[] = (('properties' in tree) ? Object.keys(tree['properties']).map(name => {
+        const loadedProperties: PropertyType[] = (('properties' in tree) ? Object.keys(tree['properties']).map(name => {
             return <PropertyType>{name: name, ...tree['properties'][name], isLoaded: true};
         }) : []);
 
-        var type = <NodeType>{ ...baseType, ...tree, properties: loadedProperties };
+        const type = <NodeType>{ ...baseType, ...tree, properties: loadedProperties };
         if (baseType) {
             type.properties = mergeProperties(type.properties, baseType.properties);
         }
@@ -429,7 +429,7 @@ export class TypeLoader {
                 this.get(path.basename(include, '.yaml')).forEach(i => {
                     type.properties = mergeProperties(type.properties, i.properties);
                     // load all included tree entries that aren't in the child:
-                    var entries = Object.keys(i).filter(e => e !== 'properties' && !(e in type));
+                    const entries = Object.keys(i).filter(e => e !== 'properties' && !(e in type));
                     entries.forEach(e => type[e] = i[e]);
                 });
             };
@@ -452,8 +452,8 @@ export class TypeLoader {
 
     private loadYAML(type: NodeType): NodeType {
         try {
-            var contents = readFileSync(type.filename, 'utf-8');
-            var tree = yaml.load(contents);
+            const contents = readFileSync(type.filename, 'utf-8');
+            const tree = yaml.load(contents);
             // var tree = yaml.parse(contents, {mapAsMap: true});
             type = this.YAMLtoNode(tree, type);
         } catch (e) {
@@ -466,18 +466,18 @@ export class TypeLoader {
 
 
     nodeType(node: Node): NodeType {
-        var props = node.properties();
+        const props = node.properties();
 
-        var getBaseType = () => {
-            let candidates = [node.path];
+        const getBaseType = () => {
+            const candidates = [node.path];
 
-            if (node.path.match(/\/cpus\/cpu[^\/]*\/$/)) {
+            if (node.path.match(/\/cpus\/cpu[^/]*\/$/)) {
                 candidates.push('/cpus/cpu');
             }
 
-            let compatibleProp = props.find(p => p.name === 'compatible');
+            const compatibleProp = props.find(p => p.name === 'compatible');
             if (compatibleProp) {
-                let compatible = compatibleProp.stringArray;
+                const compatible = compatibleProp.stringArray;
                 if (compatible) {
                     candidates.push(...compatible);
                 }

@@ -38,7 +38,7 @@ suite('Parser test suite', () => {
 	});
 
 	test('Expressions', () => {
-		var position = new vscode.Position(0, 0);
+		const position = new vscode.Position(0, 0);
 		assert.equal(0, evaluateExpr('0', position, []));
 		assert.equal(1, evaluateExpr('1', position, []));
 		assert.equal(3, evaluateExpr('1 + 2', position, []));

@@ -28,7 +28,7 @@ export class StringValue extends PropertyValue {
     }
 
     static match(state: ParserState): StringValue {
-        let string = state.match(/^"(.*?)"/);
+        const string = state.match(/^"(.*?)"/);
         if (string) {
             return new StringValue(string[1], state.location());
         }
@@ -57,15 +57,15 @@ export class IntValue extends PropertyValue {
     }
 
     static match(state: ParserState): IntValue {
-        let number = state.match(/^(0x[\da-fA-F]+|\d+)\b/);
+        const number = state.match(/^(0x[\da-fA-F]+|\d+)\b/);
         if (number) {
             return new IntValue(Number.parseInt(number[1]), state.location(), number[1].startsWith('0x'));
         }
     }
 
     toString(raw=false) {
-        let val = this.hex ? `0x${this.val.toString(16)}` : this.val;
-        return raw ? val : `< ${val} >`
+        const val = this.hex ? `0x${this.val.toString(16)}` : this.val;
+        return raw ? val : `< ${val} >`;
     }
 }
 
@@ -78,7 +78,7 @@ export class Expression extends IntValue {
     }
 
     static match(state: ParserState): Expression {
-        let start = state.freeze();
+        const start = state.freeze();
         let m = state.match(/^\(/);
         if (!m) {
             return undefined;
@@ -87,7 +87,7 @@ export class Expression extends IntValue {
         let level = 1;
         let text = '(';
         while (level !== 0) {
-            m = state.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+\-\/*]|\s*|0x[\da-fA-F]+|[\d\.]+)\s*)*([()])/);
+            m = state.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+/*-]|\s*|0x[\da-fA-F]+|[\d.]+)\s*)*([()])/);
             if (!m) {
                 state.pushDiag(`Unterminated expression`);
                 break;
@@ -100,7 +100,7 @@ export class Expression extends IntValue {
             }
         }
 
-        let loc = state.location(start);
+        const loc = state.location(start);
 
         try {
             return new Expression(text, loc);
@@ -125,24 +125,24 @@ export class ArrayValue extends PropertyValue {
     }
 
     static match(state: ParserState): ArrayValue {
-        let start = state.freeze();
-        let phandleArray = state.match(/^</);
+        const start = state.freeze();
+        const phandleArray = state.match(/^</);
         if (!phandleArray) {
             return undefined;
         }
 
         const elems = [IntValue, PHandle, Expression];
-        let values: (PHandle | IntValue)[] = [];
+        const values: (PHandle | IntValue)[] = [];
 
         while (state.skipWhitespace() && !state.match(/^>/)) {
-            var match: PHandle | IntValue | Expression | undefined;
+            let match: PHandle | IntValue | Expression | undefined;
             elems.find(e => match = e.match(state));
             if (match) {
                 values.push(match);
                 continue;
             }
 
-            let unexpectedToken = state.skipToken();
+            const unexpectedToken = state.skipToken();
             if (unexpectedToken.match(/[;,]/)) {
                 state.pushDiag(`Unterminated expression`, vscode.DiagnosticSeverity.Error, state.location(start));
                 break;
@@ -190,7 +190,7 @@ export class BytestringValue extends PropertyValue {
     }
 
     static match(state: ParserState): BytestringValue {
-        let byteArray = state.match(/^\[\s*((?:[\da-fA-F]{2}\s*)+)\]/);
+        const byteArray = state.match(/^\[\s*((?:[\da-fA-F]{2}\s*)+)\]/);
         if (byteArray) {
             return new BytestringValue((byteArray[1] as string).match(/\S{2}/g).map(c => parseInt(c, 16)), state.location());
         }
@@ -210,12 +210,12 @@ export class PHandle extends PropertyValue {
     }
 
     static match(state: ParserState): PHandle {
-        let phandle = state.match(/^&\{([\w\-\/@]+)\}/); // path reference
+        let phandle = state.match(/^&\{([\w/@-]+)\}/); // path reference
         if (phandle) {
             return new PHandle(phandle[1], false, state.location());
         }
 
-        phandle = state.match(/^&[\w\-]+/);
+        phandle = state.match(/^&[\w-]+/);
         if (phandle) {
             return new PHandle(phandle[0], true, state.location());
         }
@@ -236,11 +236,11 @@ export class PHandle extends PropertyValue {
 }
 
 export function evaluateExpr(expr: string, start: vscode.Position, diags: vscode.Diagnostic[]) {
-    expr = expr.trim().replace(/([\d\.]+|0x[\da-f]+)[ULf]+/gi, '$1');
+    expr = expr.trim().replace(/([\d.]+|0x[\da-f]+)[ULf]+/gi, '$1');
     let m: RegExpMatchArray;
     let level = 0;
     let text = '';
-    while ((m = expr.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+\-\/*]|\s*|0x[\da-fA-F]+|[\d\.]+)\s*)*([()]?)/)) && m[0].length) {
+    while ((m = expr.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+/*-]|\s*|0x[\da-fA-F]+|[\d.]+)\s*)*([()]?)/)) && m[0].length) {
         text += m[0];
         if (m[1] === '(') {
             level++;
@@ -339,7 +339,7 @@ class ParserState {
     location(start?: Offset) {
         let begin: number;
         let end: number;
-        let endLine = this.getPrevMatchLine();
+        const endLine = this.getPrevMatchLine();
         let startLine = endLine;
         if (start) {
             startLine = this.lines[start.line];
@@ -393,8 +393,8 @@ class ParserState {
     evaluate(text: string, loc: vscode.Location): any {
         text = this.replaceDefines(text, loc);
         try {
-            let diags = new Array<vscode.Diagnostic>();
-            let result = evaluateExpr(text, loc.range.start, diags);
+            const diags = new Array<vscode.Diagnostic>();
+            const result = evaluateExpr(text, loc.range.start, diags);
             diags.forEach(d => this.pushDiag(d.message, d.severity, new vscode.Location(loc.uri, d.range)));
             return result;
         } catch (e) {
@@ -405,7 +405,7 @@ class ParserState {
     }
 
     match(pattern: RegExp): RegExpMatchArray | undefined {
-        let match = this.peek(pattern);
+        const match = this.peek(pattern);
         if (match) {
             this.offset.col += match[0].length;
             if (this.offset.col === this.lines[this.offset.line].length) {
@@ -433,7 +433,7 @@ class ParserState {
     }
 
     skipToken() {
-        let match = this.match(/^[#-\w]+|./);
+        const match = this.match(/^[#-\w]+|./);
         if (!match) {
             this.offset.line = this.lines.length;
             return '';
@@ -483,7 +483,7 @@ class ParserState {
 }
 
 function parsePropValue(state: ParserState) {
-    let elems: PropertyValue[] = [];
+    const elems: PropertyValue[] = [];
 
     const valueTypes = [ArrayValue, StringValue, BytestringValue, PHandle];
 
@@ -500,7 +500,7 @@ function parsePropValue(state: ParserState) {
             state.skipWhitespace();
         }
 
-        var match: PropertyValue;
+        let match: PropertyValue;
         valueTypes.find(type => match = type.match(state));
         if (match) {
             elems.push(match);
@@ -539,7 +539,7 @@ export class Property {
 
     toString(): string {
         if (this.value.length === 1 && this.value[0] instanceof BoolValue) {
-            return `${this.name}`
+            return `${this.name}`;
         }
 
         return `${this.name} = ${this.valueString()}`;
@@ -616,7 +616,7 @@ export class Property {
 
     type(): string {
         if (this.value.length === 1) {
-            let v = this.value[0]
+            const v = this.value[0];
             if (v instanceof ArrayValue) {
                 if (v.length === 1) {
                     if (v.val[0] instanceof IntValue) {
@@ -680,7 +680,7 @@ export class Property {
 
         return 'compound';
     }
-};
+}
 
 export class OffsetRange {
     doc: vscode.TextDocument;
@@ -713,7 +713,7 @@ export class OffsetRange {
 enum CtxKind {
     Board,
     Overlay,
-};
+}
 
 export class DTSCtx {
     uri: vscode.Uri;
@@ -746,7 +746,7 @@ export class DTSCtx {
         this.macros = [];
         this.diags.clear();
     }
-};
+}
 
 export class NodeEntry {
     node: Node;
@@ -800,7 +800,7 @@ export class Node {
     }
 
     enabled(): boolean {
-        let status = this.property('status');
+        const status = this.property('status');
         return !status?.string || (['okay', 'ok'].includes(status.string));
     }
 
@@ -809,7 +809,7 @@ export class Node {
     }
 
     children(): Node[] {
-        let children: { [path: string]: Node } = {};
+        const children: { [path: string]: Node } = {};
         this.entries.forEach(e => e.children.forEach(c => children[c.node.path] = c.node));
         return Object.values(children);
     }
@@ -819,13 +819,13 @@ export class Node {
     }
 
     labels(): string[] {
-        let labels: string[] = [];
+        const labels: string[] = [];
         this.entries.forEach(e => labels.push(...e.labels));
         return labels;
     }
 
     properties(): Property[] {
-        let props: Property[] = [];
+        const props: Property[] = [];
         this.entries.forEach(e => props.push(...e.properties));
         return props;
     }
@@ -836,11 +836,11 @@ export class Node {
     }
 
     uniqueProperties(): Property[] {
-        let props = {};
+        const props = {};
         this.sortedEntries.forEach(e => e.properties.forEach(p => props[p.name] = p));
         return Object.values(props);
     }
-};
+}
 
 export class Parser {
     nodes: {[fullPath: string]: Node};
@@ -851,7 +851,7 @@ export class Parser {
     context?: DTSCtx;
     types: TypeLoader;
 
-    constructor(defines: {}, includes: string[], types: TypeLoader) {
+    constructor(defines: {[name: string]: string}, includes: string[], types: TypeLoader) {
         this.nodes = {};
         this.includes = includes;
         this.defines = defines;
@@ -863,14 +863,14 @@ export class Parser {
     }
 
     get roots() {
-        var roots = [];
-        this.contexts.forEach(c => roots.push(...c.roots))
+        const roots = [];
+        this.contexts.forEach(c => roots.push(...c.roots));
         return roots;
     }
 
     get entries() {
-        var entries = [];
-        this.contexts.forEach(c => entries.push(...c.entries))
+        const entries = [];
+        this.contexts.forEach(c => entries.push(...c.entries));
         return entries;
     }
 
@@ -879,7 +879,7 @@ export class Parser {
     }
 
     private get contexts(): DTSCtx[] {
-        let ctxs = [];
+        const ctxs = [];
         if (this.boardCtx) {
             ctxs.push(this.boardCtx);
         }
@@ -926,7 +926,7 @@ export class Parser {
     }
 
     private async parse(doc: vscode.TextDocument, kind: CtxKind): Promise<DTSCtx> {
-        let ctx = new DTSCtx(doc.uri, kind);
+        const ctx = new DTSCtx(doc.uri, kind);
         let macros: Macro[];
         if (kind !== CtxKind.Board && this.boardCtx) {
             macros = this.boardCtx.macros.filter(m => !(m instanceof LineMacro) && !(m instanceof CounterMacro) && !(m instanceof FileMacro));
@@ -941,25 +941,25 @@ export class Parser {
         ctx.lines = state.lines;
         ctx.macros.push(...state.macros);
         let entries = 0;
-        let timeStart = process.hrtime();
-        let nodeStack: NodeEntry[] = [];
+        const timeStart = process.hrtime();
+        const nodeStack: NodeEntry[] = [];
         let requireSemicolon = false;
         let labels = new Array<string>();
         while (state.skipWhitespace()) {
-            let blockComment = state.match(/^\/\*[\s\S]*?\*\//);
+            const blockComment = state.match(/^\/\*[\s\S]*?\*\//);
             if (blockComment) {
                 continue;
             }
 
-            let comment = state.match(/^\/\/.*/);
+            const comment = state.match(/^\/\/.*/);
             if (comment) {
                 continue;
             }
 
             if (requireSemicolon) {
                 requireSemicolon = false;
-                let loc = state.location();
-                let semicolon = state.match(/^;/);
+                const loc = state.location();
+                const semicolon = state.match(/^;/);
                 if (!semicolon) {
                     state.pushDiag('Missing semicolon', vscode.DiagnosticSeverity.Error, loc);
                 }
@@ -967,17 +967,17 @@ export class Parser {
                 continue;
             }
 
-            let label = state.match(/^([\w\-]+):\s*/);
+            const label = state.match(/^([\w-]+):\s*/);
             if (label) {
                 labels.push(label[1]);
                 continue;
             }
 
-            let name = state.match(/^([#?\w,\.+\-]+)/);
+            const name = state.match(/^([#?\w,.+-]+)/);
             if (name) {
-                let nameLoc = state.location();
+                const nameLoc = state.location();
 
-                let nodeMatch = state.match(/^(?:@([\da-fA-F]+))?\s*{/);
+                const nodeMatch = state.match(/^(?:@([\da-fA-F]+))?\s*{/);
                 if (nodeMatch) {
                     let node = new Node(name[1],
                         nodeMatch[1],
@@ -989,7 +989,7 @@ export class Parser {
                         this.nodes[node.path] = node;
                     }
 
-                    let entry = new NodeEntry(nameLoc, node, nameLoc, ctx, entries++);
+                    const entry = new NodeEntry(nameLoc, node, nameLoc, ctx, entries++);
 
                     entry.labels.push(...labels);
                     node.entries.push(entry);
@@ -1015,10 +1015,10 @@ export class Parser {
                 requireSemicolon = true;
 
                 state.skipWhitespace();
-                let hasPropValue = state.match(/^\=/);
+                const hasPropValue = state.match(/^=/);
                 if (hasPropValue) {
                     if (nodeStack.length > 0) {
-                        let p = new Property(name[0], nameLoc, state, labels);
+                        const p = new Property(name[0], nameLoc, state, labels);
                         nodeStack[nodeStack.length - 1].properties.push(p);
                     } else {
                         state.pushDiag('Property outside of node context', vscode.DiagnosticSeverity.Error, nameLoc);
@@ -1029,7 +1029,7 @@ export class Parser {
                 }
 
                 if (nodeStack.length > 0) {
-                    let p = new Property(name[0], nameLoc, state, labels);
+                    const p = new Property(name[0], nameLoc, state, labels);
                     nodeStack[nodeStack.length - 1].properties.push(p);
                     labels = [];
                     continue;
@@ -1039,12 +1039,12 @@ export class Parser {
                 continue;
             }
 
-            let refMatch = state.match(/^(&[\w\-]+)/);
+            const refMatch = state.match(/^(&[\w-]+)/);
             if (refMatch) {
-                let refLoc = state.location();
+                const refLoc = state.location();
                 state.skipWhitespace();
 
-                let isNode = state.match(/^{/);
+                const isNode = state.match(/^{/);
                 if (!isNode) {
                     state.pushDiag('References can only be made to nodes');
                     continue;
@@ -1056,7 +1056,7 @@ export class Parser {
                     node = new Node(refMatch[1]);
                 }
 
-                let entry = new NodeEntry(refLoc, node, refLoc, ctx, entries++);
+                const entry = new NodeEntry(refLoc, node, refLoc, ctx, entries++);
                 entry.labels.push(...labels);
                 node.entries.push(entry);
                 entry.ref = refMatch[1];
@@ -1075,24 +1075,24 @@ export class Parser {
                 labels = [];
             }
 
-            let versionDirective = state.match(/^\/dts-v.+?\/\s*/);
+            const versionDirective = state.match(/^\/dts-v.+?\/\s*/);
             if (versionDirective) {
                 requireSemicolon = true;
                 continue;
             }
 
-            let deleteNode = state.match(/^\/delete-node\//);
+            const deleteNode = state.match(/^\/delete-node\//);
             if (deleteNode) {
                 state.skipWhitespace();
                 requireSemicolon = true;
 
-                let node = state.match(/^(&?)([\w,\._+\-]+)/);
+                const node = state.match(/^(&?)([\w,._+-]+)/);
                 if (!node) {
                     state.pushDiag(`Expected node`);
                     continue;
                 }
 
-                let n = this.nodeArray().find(n => (node[1] ? (n.labels().indexOf(node[2]) !== -1) : (node[2] === n.name)));
+                const n = this.nodeArray().find(n => (node[1] ? (n.labels().indexOf(node[2]) !== -1) : (node[2] === n.name)));
                 if (n) {
                     n.deleted = true;
                 } else {
@@ -1101,12 +1101,12 @@ export class Parser {
                 continue;
             }
 
-            let deleteProp = state.match(/^\/delete-property\//);
+            const deleteProp = state.match(/^\/delete-property\//);
             if (deleteProp) {
                 state.skipWhitespace();
                 requireSemicolon = true;
 
-                let prop = state.match(/^[#?\w,\._+\-]+/);
+                const prop = state.match(/^[#?\w,._+-]+/);
                 if (!prop) {
                     state.pushDiag('Expected property');
                     continue;
@@ -1117,11 +1117,11 @@ export class Parser {
                     continue;
                 }
 
-                let props = nodeStack[nodeStack.length-1]?.node.properties();
+                const props = nodeStack[nodeStack.length-1]?.node.properties();
                 if (!props) {
                     continue;
                 }
-                let p = props.find(p => p.name === deleteProp[0]);
+                const p = props.find(p => p.name === deleteProp[0]);
                 if (!p) {
                     state.pushDiag(`Unknown property`, vscode.DiagnosticSeverity.Warning);
                     continue;
@@ -1130,13 +1130,13 @@ export class Parser {
                 continue;
             }
 
-            let rootMatch = state.match(/^\/\s*{/);
+            const rootMatch = state.match(/^\/\s*{/);
             if (rootMatch) {
                 if (!this.root) {
                     this.root = new Node('/');
                     this.nodes['/'] = this.root;
                 }
-                let entry = new NodeEntry(state.location(), this.root, new vscode.Location(state.location().uri, state.location().range.start), ctx, entries++);
+                const entry = new NodeEntry(state.location(), this.root, new vscode.Location(state.location().uri, state.location().range.start), ctx, entries++);
                 this.root.entries.push(entry);
                 ctx.roots.push(entry);
                 ctx.entries.push(entry);
@@ -1144,10 +1144,10 @@ export class Parser {
                 continue;
             }
 
-            let closingBrace = state.match(/^}/);
+            const closingBrace = state.match(/^}/);
             if (closingBrace) {
                 if (nodeStack.length > 0) {
-                    let entry = nodeStack.pop();
+                    const entry = nodeStack.pop();
                     entry.loc = new vscode.Location(entry.loc.uri, new vscode.Range(entry.loc.range.start, state.location().range.end));
                 } else {
                     state.pushDiag('Unexpected closing bracket');
@@ -1162,7 +1162,7 @@ export class Parser {
         }
 
         if (nodeStack.length > 0) {
-            let entry = nodeStack[nodeStack.length - 1];
+            const entry = nodeStack[nodeStack.length - 1];
             entry.loc = new vscode.Location(entry.loc.uri, new vscode.Range(entry.loc.range.start, state.location().range.end));
             console.error(`Unterminated node: ${nodeStack[nodeStack.length - 1].node.name}`);
             state.pushDiag('Unterminated node', vscode.DiagnosticSeverity.Error, entry.nameLoc);
@@ -1172,7 +1172,7 @@ export class Parser {
             state.pushDiag(`Expected semicolon`, vscode.DiagnosticSeverity.Error);
         }
 
-        let procTime = process.hrtime(timeStart);
+        const procTime = process.hrtime(timeStart);
 
         console.log(`Parsed ${doc.uri.fsPath} in ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
         this.resolveTypes(ctx);
@@ -1195,8 +1195,8 @@ export class Parser {
 
     getNode(search: string): Node | undefined {
         if (search.startsWith('&')) {
-            let label = search.slice(1);
-            let node = this.nodeArray().find(n => n.labels().indexOf(label) !== -1);
+            const label = search.slice(1);
+            const node = this.nodeArray().find(n => n.labels().indexOf(label) !== -1);
             if (node) {
                 return this.nodes[node.path];
             }
@@ -1210,7 +1210,7 @@ export class Parser {
     }
 
     getNodeAt(pos: vscode.Position, uri: vscode.Uri): Node | undefined {
-        let allNodes = this.nodeArray().filter(n => n.entries.find(e => e.loc.uri.fsPath === uri.fsPath && e.loc.range.contains(pos)));
+        const allNodes = this.nodeArray().filter(n => n.entries.find(e => e.loc.uri.fsPath === uri.fsPath && e.loc.range.contains(pos)));
         if (allNodes.length === 0) {
             return undefined;
         }
@@ -1221,8 +1221,8 @@ export class Parser {
     }
 
     getPropertyAt(pos: vscode.Position, uri: vscode.Uri): [Node, Property] | undefined {
-        let node = this.getNodeAt(pos, uri);
-        let prop = node?.properties().find(p => p.loc.uri.fsPath === uri.fsPath && p.fullRange.contains(pos));
+        const node = this.getNodeAt(pos, uri);
+        const prop = node?.properties().find(p => p.loc.uri.fsPath === uri.fsPath && p.fullRange.contains(pos));
         if (prop) {
             return [node, prop];
         }
@@ -1238,7 +1238,7 @@ export class Parser {
 }
 
 export function getCells(propName: string, parent?: Node): string[] | undefined {
-    let cellProp = getPHandleCells(propName, parent);
+    const cellProp = getPHandleCells(propName, parent);
 
     if (cellProp) {
         return ['label'].concat(Array(<number> cellProp.value[0].val).fill('cell'));
@@ -1248,12 +1248,12 @@ export function getCells(propName: string, parent?: Node): string[] | undefined 
         let addrCells = 2;
         let sizeCells = 1;
         if (parent) {
-            let addrCellsProp = parent.property('#address-cells');
+            const addrCellsProp = parent.property('#address-cells');
             if (addrCellsProp?.number !== undefined) {
                 addrCells = addrCellsProp.number;
             }
 
-            let sizeCellsProp = parent.property('#size-cells');
+            const sizeCellsProp = parent.property('#size-cells');
             if (sizeCellsProp?.number !== undefined) {
                 sizeCells = sizeCellsProp.number;
             }
@@ -1268,7 +1268,7 @@ export function cellName(propname: string) {
          * where XXX is the singular version of the name of this property UNLESS the property is called XXX-gpios, in which
          * case the cell count is determined by the parent's #gpio-cells property
          */
-        return propname.endsWith('-gpios') ? '#gpio-cells' : ('#' + propname.slice(0, propname.length) + '-cells')
+        return propname.endsWith('-gpios') ? '#gpio-cells' : ('#' + propname.slice(0, propname.length) + '-cells');
     }
 }
 

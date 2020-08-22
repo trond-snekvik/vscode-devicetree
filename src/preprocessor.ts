@@ -18,14 +18,14 @@ export class Macro {
 
         let insertText: string;
         let match: RegExpExecArray;
-        let result = new Array<MacroInstance>();
-        let tag = this.args ? `${this.name}\\s*\\(` : this.name;
+        const result = new Array<MacroInstance>();
+        const tag = this.args ? `${this.name}\\s*\\(` : this.name;
 
         let regex = new RegExp(`(?<!#)#${tag}|\\b${tag}\\b`, 'g');
-        while (match = regex.exec(text)) {
+        while ((match = regex.exec(text))) {
             if (insertText === undefined) {
-                let otherDefines = defines.filter(d => d !== this);
-                let macros = new Array<MacroInstance>();
+                const otherDefines = defines.filter(d => d !== this);
+                const macros = new Array<MacroInstance>();
                 otherDefines.forEach(d => {
                     macros.push(...d.find(this.value, otherDefines, loc, true));
                 });
@@ -33,16 +33,16 @@ export class Macro {
                 insertText = MacroInstance.process(this.value, macros);
             }
 
-            let replaceText = match[0].startsWith('#') ? `"${insertText}"` : insertText;
+            const replaceText = match[0].startsWith('#') ? `"${insertText}"` : insertText;
 
             let raw = match[0];
             let arg = '';
             if (this.args) {
-                let args = new Array<string>();
+                const args = new Array<string>();
                 text = text.slice(match.index + match[0].length);
                 let depth = 1;
                 while (depth && text.length) {
-                    let paramMatch = text.match(/^([^(),]*)(.)/);
+                    const paramMatch = text.match(/^([^(),]*)(.)/);
                     if (!paramMatch) {
                         return [];
                     }
@@ -68,21 +68,21 @@ export class Macro {
                     return [];
                 }
 
-                let varArgs = new Macro('__VA_ARGS__', '');
+                const varArgs = new Macro('__VA_ARGS__', '');
 
-                let macroArgs = args.map((a, i) => {
+                const macroArgs = args.map((a, i) => {
                     if (i >= this.args.length - 1 && this.args[this.args.length - 1] === '...') {
                         if (varArgs.value) {
                             varArgs.value += ', ';
                         }
 
-                        varArgs.value += a
+                        varArgs.value += a;
                         return undefined;
                     } else if (i >= this.args.length) {
                         return undefined;
                     }
 
-                    let macros = new Array<MacroInstance>();
+                    const macros = new Array<MacroInstance>();
                     defines.forEach(d => {
                         macros.push(...d.find(a, defines, loc, true));
                     });
@@ -95,7 +95,7 @@ export class Macro {
                     macroArgs.push(new Macro(',\\s*##__VA_ARGS__', ''));
                 }
 
-                let macros = new Array<MacroInstance>();
+                const macros = new Array<MacroInstance>();
                 macroArgs.forEach(arg => {
                     macros.push(...arg.find(replaceText, macroArgs, loc, true));
                 });
@@ -106,7 +106,7 @@ export class Macro {
         }
 
         regex = new RegExp(`##`, 'g');
-        while (match = regex.exec(text)) {
+        while ((match = regex.exec(text))) {
             if (result.some(m => m.start === match.index + 2 || m.start + m.raw.length === match.index)) {
                 result.push(new MacroInstance(this, match[0], '', match.index));
             }
@@ -121,7 +121,7 @@ export class Macro {
         this.value = value;
         this.args = args;
     }
-};
+}
 
 export class LineMacro extends Macro {
     find(text: string, defines: Macro[], loc: vscode.Location, inMacro=false): MacroInstance[] {
@@ -189,7 +189,7 @@ export class MacroInstance {
         this.insert = insert;
         this.start = start;
     }
-};
+}
 
 function readLines(doc: vscode.TextDocument): Line[] | null {
     try {
@@ -206,14 +206,14 @@ type Output = [Line[], Macro[], IncludeStatement[]];
 
 export async function preprocess(doc: vscode.TextDocument, macros: Macro[], includes: string[], diags: DiagnosticsSet): Promise<Output> {
     const pushLineDiag = (line: Line, message: string, severity: vscode.DiagnosticSeverity=vscode.DiagnosticSeverity.Warning) => {
-        let diag = new vscode.Diagnostic(line.location.range, message, severity);
+        const diag = new vscode.Diagnostic(line.location.range, message, severity);
         diags.push(line.uri, diag);
         return diag;
-    }
+    };
 
     const timeStart = process.hrtime();
 
-    let result = {
+    const result = {
         lines: new Array<Line>(),
         macros: [new LineMacro(), new FileMacro(vscode.env.appRoot), new CounterMacro(), ...macros],
         includes: new Array<IncludeStatement>(),
@@ -225,22 +225,22 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
         return Promise.resolve([result.lines, result.macros, result.includes]);
     }
 
-    let scopes: {line: Line, condition: boolean}[] = [];
-    let once = new Array<vscode.Uri>();
+    const scopes: {line: Line, condition: boolean}[] = [];
+    const once = new Array<vscode.Uri>();
 
     while (rawLines.length) {
-        let line = rawLines.splice(0, 1)[0];
+        const line = rawLines.splice(0, 1)[0];
         let text = line.text;
 
         try {
             text = text.replace(/\/\/.*/, '');
             text = text.replace(/\/\*.*?\*\//, '');
 
-            let blockComment = text.match(/\/\*.*/);
+            const blockComment = text.match(/\/\*.*/);
             if (blockComment) {
                 text = text.replace(blockComment[0], '');
                 while (rawLines) {
-                    let blockEnd = rawLines[0].text.match(/^.*?\*\//);
+                    const blockEnd = rawLines[0].text.match(/^.*?\*\//);
                     if (blockEnd) {
                         rawLines[0].text = rawLines[0].text.slice(blockEnd[0].length);
                         break;
@@ -250,7 +250,7 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
                 }
             }
 
-            let directive = text.match(/^\s*#\s*(\w+)/);
+            const directive = text.match(/^\s*#\s*(\w+)/);
             if (directive) {
                 while (text.endsWith('\\') && rawLines.length) {
                     text = text.slice(0, text.length) + rawLines.splice(0, 1)[0].text;
@@ -348,13 +348,13 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
                 }
 
                 if (directive[1] === 'define') {
-                    let define = value.match(/^(\w+)(?:\((.*?)\))?\s*(.*)/);
+                    const define = value.match(/^(\w+)(?:\((.*?)\))?\s*(.*)/);
                     if (!define) {
                         pushLineDiag(line, 'Invalid define syntax');
                         continue;
                     }
 
-                    let existing = result.macros.find(d => !d.undef && d.name === define[1]);
+                    const existing = result.macros.find(d => !d.undef && d.name === define[1]);
                     if (existing !== undefined) {
                         pushLineDiag(line, 'Duplicate definition');
                         continue;
@@ -365,13 +365,13 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
                 }
 
                 if (directive[1] === 'undef') {
-                    let undef = value.match(/^\w+/);
+                    const undef = value.match(/^\w+/);
                     if (!value) {
                         pushLineDiag(line, 'Invalid undef syntax');
                         continue;
                     }
 
-                    let define = result.macros.find(d => d.name === undef[0]);
+                    const define = result.macros.find(d => d.name === undef[0]);
                     if (!define || define.undef) {
                         pushLineDiag(line, 'Unknown define');
                         continue;
@@ -384,7 +384,7 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
                 if (directive[1] === 'pragma') {
                     if (value === 'once') {
                         if (once.some(uri => uri.fsPath === line.uri.fsPath)) {
-                            let lines = rawLines.findIndex(l => l.uri.fsPath !== line.uri.fsPath);
+                            const lines = rawLines.findIndex(l => l.uri.fsPath !== line.uri.fsPath);
                             if (lines > 0) {
                                 rawLines.splice(0, lines);
                             }
@@ -393,32 +393,32 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
 
                         once.push(line.uri);
                     } else {
-                        pushLineDiag(line, `Unknown pragma directive "${value}"`)
+                        pushLineDiag(line, `Unknown pragma directive "${value}"`);
                     }
                     continue;
                 }
 
                 if (directive[1] === 'include') {
-                    let include = value.replace(/(?:"([-\/\w\.$%]+)"|<([-\/\w\.$%]+)>)/g, '$1$2').trim();
+                    const include = value.replace(/(?:"([-/\w.$%]+)"|<([-/\w.$%]+)>)/g, '$1$2').trim();
                     if (!include) {
                         pushLineDiag(line, 'Invalid include');
                         continue;
                     }
 
-                    let file = [path.resolve(path.dirname(line.uri.fsPath)), ...includes].map(dir => path.resolve(dir, include)).find(path => fs.existsSync(path));
+                    const file = [path.resolve(path.dirname(line.uri.fsPath)), ...includes].map(dir => path.resolve(dir, include)).find(path => fs.existsSync(path));
                     if (!file) {
                         pushLineDiag(line, `No such file: ${include}`, vscode.DiagnosticSeverity.Warning);
                         continue;
                     }
 
-                    let uri = vscode.Uri.file(file);
+                    const uri = vscode.Uri.file(file);
 
-                    let start = text.indexOf(value);
-                    result.includes.push({ loc: new vscode.Location(line.uri, new vscode.Range(line.number, start, line.number, start + value.length)), dst: uri })
+                    const start = text.indexOf(value);
+                    result.includes.push({ loc: new vscode.Location(line.uri, new vscode.Range(line.number, start, line.number, start + value.length)), dst: uri });
 
                     // inject the included file's lines. They will be the next to be processed:
                     const doc = await vscode.workspace.openTextDocument(uri);
-                    let lines = readLines(doc);
+                    const lines = readLines(doc);
                     if (lines === null) {
                         pushLineDiag(line, 'Unable to read file');
                     } else {
@@ -441,7 +441,7 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
                 continue;
             }
 
-            let lineMacros = [];
+            const lineMacros = [];
             result.macros.filter(d => !d.undef).forEach(d => {
                 lineMacros.push(...d.find(text, result.macros, line.location));
             });

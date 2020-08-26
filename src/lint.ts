@@ -286,7 +286,7 @@ function lintNode(node: Node, ctx: LintCtx) {
             node.parent.entries.forEach(e => ctx.diags.pushLoc(e.nameLoc, `Missing cs-gpios property. Required for nodes on spi bus.`, vscode.DiagnosticSeverity.Error));
         } else if (cs.pHandleArray.length <= reg) {
             node.entries.forEach(e => {
-                const diag = ctx.diags.pushLoc(e.loc, `No cs-gpios entry for SPI device ${reg}`, vscode.DiagnosticSeverity.Error);
+                const diag = ctx.diags.pushLoc(e.nameLoc, `No cs-gpios entry for SPI device ${reg}`, vscode.DiagnosticSeverity.Error);
                 diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(cs.loc, `SPI bus cs-gpios property declared here`)];
             });
         }
@@ -367,7 +367,9 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
             'array': 'int'
         };
 
-        if (propType.type !== 'compound') {
+        if (actualPropType === 'invalid') {
+            ctx.diags.pushLoc(prop.valueLoc, `Invalid property value`, vscode.DiagnosticSeverity.Error);
+        } else if (propType.type !== 'compound') {
             if (Array.isArray(propType.type)) {
                 if (!propType.type.includes(actualPropType) && !propType.type.map(t => equivalent[t]).includes(actualPropType)) {
                     ctx.diags.pushLoc(prop.loc, `Property value type must be one of ${propType.type.join(', ')}, was ${actualPropType}`);

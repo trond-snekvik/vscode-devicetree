@@ -852,18 +852,17 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             return;
         }
 
-        if (!prop.pHandleArray) {
+        const value = prop.value;
+        if (!value?.length) {
             return;
         }
 
-        const value = prop.pHandleArray;
-
         const entry = value.find(v => v.loc.range.contains(position));
-
-        let paramIndex = (entry?.val.findIndex(v => v.loc.range.contains(position)) ?? 0) - 1;
-        if (paramIndex < 0) {
-            paramIndex = entry.val.length - 1;
+        if (!(entry instanceof dts.ArrayValue) || !entry?.val?.length) {
+            return;
         }
+
+        const paramIndex = (entry.val.findIndex(v => v.loc.range.contains(position)) ?? (entry.val.length - 1));
 
         let params: string[];
 

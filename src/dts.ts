@@ -561,6 +561,22 @@ export class Property {
         return this.value.map(v => v.toString()).join(', ');
     }
 
+    get valueLoc() {
+        const range = this.value.reduce((union, v) => {
+            if (union) {
+                return union.union(v.loc.range);
+            }
+
+            return v.loc.range;
+        }, <vscode.Range>undefined);
+
+        if (range) {
+            return new vscode.Location(this.loc.uri, range);
+        }
+
+        return this.loc; // better than nothing
+    }
+
     get boolean() {
         if (this.value.length === 1 && (this.value[0] instanceof BoolValue)) {
             return true;
@@ -942,7 +958,7 @@ export class DTSCtx {
     }
 
     has(uri: vscode.Uri): boolean {
-        return !!this.board.has(uri) || this.overlays.some(o => o.has(uri));
+        return !!this.board?.has(uri) || this.overlays.some(o => o.has(uri));
     }
 
     getDiags(): DiagnosticsSet {
@@ -1522,10 +1538,10 @@ export function cellName(propname: string) {
          * where XXX is the singular version of the name of this property UNLESS the property is called XXX-gpios, in which
          * case the cell count is determined by the parent's #gpio-cells property
          */
-        return propname.endsWith('-gpios') ? '#gpio-cells' : ('#' + propname.slice(0, propname.length) + '-cells');
+        return propname.endsWith('-gpios') ? 'gpio-cells' : propname.slice(0, propname.length) + '-cells';
     }
 }
 
 export function getPHandleCells(propname: string, parent: Node): Property {
-    return parent.property(cellName(propname));
+    return parent?.property(cellName(propname));
 }

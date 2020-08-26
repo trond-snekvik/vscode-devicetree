@@ -5,8 +5,6 @@ import * as types from './types';
 import * as zephyr from './zephyr';
 import {lint, LintCtx} from './lint';
 import * as path from 'path';
-import * as fs from 'fs';
-import { execSync } from 'child_process';
 import { DiagnosticsSet } from './diags';
 
 function getConfig(variable: string) {
@@ -425,17 +423,119 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
     }
 
     resolveCompletionItem?(item: vscode.CompletionItem, token: vscode.CancellationToken): vscode.ProviderResult<vscode.CompletionItem> {
-        if (item.kind === vscode.CompletionItemKind.Class) {
-            const node = this.parser.currCtx?.node(item.label);
-            if (node) {
-                const type = this.types.nodeType(node);
-                if (type) {
-                    item.documentation = new vscode.MarkdownString();
-                    if (type.description) {
-                        item.documentation.appendText(type.description);
-                    }
-                }
+        const n = item['dts-node-type'] as types.NodeType;
+        if (n) {
+            const parent = item['dts-parent'] as dts.Node;
+            const snippet = new vscode.SnippetString();
+            snippet.appendPlaceholder(item.label);
+            const addrCells = parent?.property('#address-cells')?.number;
+            const sizeCells = parent?.property('#size-cells')?.number;
+            const insertAddr = (addrCells === 1);
+            if (insertAddr) {
+                snippet.appendText('@');
+                snippet.appendPlaceholder('0');
             }
+
+            snippet.appendText(` {\n\tcompatible = "${n.name}";\n`);
+
+            const insertValueSnippet = (p: types.PropertyType, insert?: any) => {
+                let surroundingBraces = [];
+                let defaultVal: string;
+                if (p.type === 'string') {
+                    surroundingBraces = ['"', '"'];
+                } else if (p.type === 'bytearray') {
+                    surroundingBraces = ['[ ', ' ]'];
+                } else if (!Array.isArray(p.type)) {
+                    surroundingBraces = ['< ', ' >'];
+                    if (p.type === 'int') {
+                        defaultVal = '0';
+                    } else if (p.type === 'phandle') {
+                        defaultVal = '&ref';
+                    }
+                } else {
+                    snippet.appendTabstop();
+                    return;
+                }
+
+                snippet.appendText(surroundingBraces[0]);
+                if (insert !== undefined) {
+                    snippet.appendPlaceholder(insert.toString());
+                } else if (defaultVal) {
+                    snippet.appendPlaceholder(defaultVal);
+                } else if (p.const !== undefined) {
+                    snippet.appendText(insert.toString());
+                } else {
+                    snippet.appendTabstop();
+                }
+                snippet.appendText(surroundingBraces[1]);
+            };
+
+            const requiredProps = n.properties.filter(p => p.required && p.name !== 'compatible') ?? [];
+            if (requiredProps.length > 0) {
+
+                const defaultGpioController = this.parser.currCtx?.nodeArray().find(node => node.property('gpio-controller'));
+
+                requiredProps.forEach(p => {
+                    snippet.appendText(`\t${p.name}`);
+                    if (p.type === 'boolean') {
+                        /* No value */
+                    } else {
+                        snippet.appendText(' = ');
+                        if (p.name === 'reg') {
+                            snippet.appendText('< ');
+                            if (insertAddr) {
+                                snippet.appendText('0x');
+                                snippet.appendTabstop(2);
+                                snippet.appendText(' ');
+                            } else {
+                                let addrs = addrCells;
+                                while (addrs-- > 0) {
+                                    snippet.appendPlaceholder('addr');
+                                    snippet.appendText(' ');
+                                }
+                            }
+
+                            let size = sizeCells;
+                            while (size-- > 0) {
+                                snippet.appendPlaceholder('size');
+                                snippet.appendText(' ');
+                            }
+
+                            snippet.appendText('>');
+                        } else if (p.name === 'label') {
+                            insertValueSnippet(p, item.label.toUpperCase());
+                        } else if (p.type === 'phandle-array' && p.name.endsWith('-gpios') && defaultGpioController) {
+                            snippet.appendText('< ');
+                            snippet.appendPlaceholder(`&${defaultGpioController.labels()[0] ?? '"' + defaultGpioController.path + '"'}`);
+                            const cells = defaultGpioController.type?.[dts.cellName(p.name)] as string[];
+                            if (cells) {
+                                cells.forEach(c => {
+                                    snippet.appendText(' ');
+                                    snippet.appendPlaceholder(c);
+                                });
+                            } else {
+                                snippet.appendText(' ');
+                                snippet.appendPlaceholder('cells');
+                            }
+
+                            snippet.appendText(' >');
+                        } else {
+                            insertValueSnippet(p, p.const ?? p.default ?? p.enum);
+                        }
+                    }
+
+                    snippet.appendText(';\n');
+                });
+            } else {
+                snippet.appendText('\t');
+                snippet.appendTabstop();
+                snippet.appendText('\n');
+            }
+            snippet.appendText('};');
+
+            item.detail = n.name;
+            item.insertText = snippet;
+            item.documentation = n.description;
         }
         return item;
     }
@@ -600,10 +700,8 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                                 completion.insertText = propValueTemplate(typename, 'string');
                             }
 
-                            if (type.loaded) {
-                                completion.detail = type.title;
-                                completion.documentation = type.description;
-                            }
+                            completion.detail = type.title;
+                            completion.documentation = type.description;
                             return completion;
                         })
                     ).reduce((all, types) => {
@@ -639,41 +737,59 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                 return completion;
             });
 
-        let nodes: types.NodeType[] = [];
+        let nodes: types.NodeType[] = Object.values(this.types.types)
+            .filter(n => n[0].name !== '/')
+            .reduce((all, n) => [...all, ...n], [])
+            .filter(n => n.valid && n.name && (!n.name.startsWith('/') || n.name.startsWith(node.name)));
+
+        // Do some pretty conservative filtering, not the end of the world if the user's node doesn't show up
         if (node.type?.['bus']) {
-            nodes = Object.values(this.types.types)
-                .filter(n => n[0].name !== '/')
-                .reduce((all, n) => [...all, ...n], [])
-                .filter(n => n.loaded && n['on-bus'] === node.type['bus']);
-        }
-
-        nodes = nodes.filter(n => !n.name.startsWith('/') || n.name.startsWith(node.name));
-
-        if (node.type?.['child-binding']) {
-            nodes.push(node.type['child-binding']);
-        }
-
-        const anyNode = new vscode.CompletionItem('node', vscode.CompletionItemKind.Class);
-        anyNode.insertText = new vscode.SnippetString();
-        anyNode.insertText.appendPlaceholder('node-name');
-        if (node.type?.["child-binding"]) {
-            anyNode.insertText.appendText(' {\n');
-            node.type['child-binding'].properties.filter(p => p.required || p.name === 'status').forEach(p => {
-                (<vscode.SnippetString>anyNode.insertText).appendText(`\t`);
-                appendPropSnippet(p, <vscode.SnippetString>anyNode.insertText); // todo: This new node's parent is `node`, how to address?
-                (<vscode.SnippetString>anyNode.insertText).appendText(`\n`);
-            });
-
+            nodes = nodes.filter(n => n['on-bus'] === node.type['bus']);
+        } else if (node.type?.['child-binding']) {
+            nodes = [node.type['child-binding']];
+        } else if (node.name === 'cpus') {
+            nodes = nodes.filter(n => n.include === 'cpu.yaml');
+        } else if (node.name === 'soc') {
+            // Stuff on the soc node are peripherals, should be made by the chip vendor
+            const vendor = node.parent.property('compatible')?.string?.match(/(.*?),/)?.[1];
+            nodes = nodes.filter(n => !n["on-bus"] && n.include !== 'cpu.yaml' && (!vendor || n.name.startsWith(vendor + ',')));
+        } else if (node.path === '/') {
+            nodes = nodes.filter(n => n.name.startsWith('/'));
         } else {
-            anyNode.insertText.appendText(' {\n\tcompatible = "');
-            anyNode.insertText.appendTabstop();
-            anyNode.insertText.appendText('";');
-            anyNode.insertText.appendText('\n\tstatus = "');
-            anyNode.insertText.appendPlaceholder('okay');
-            anyNode.insertText.appendText('";\n\t');
-            anyNode.insertText.appendTabstop();
+            nodes = [];
         }
-        anyNode.insertText.appendText('\n};');
+
+        const nodeCompletions = nodes.map(n => {
+            let name: string;
+            // Find a reasonable name
+            const parts = n.name?.split(',');
+            if (parts) {
+                // If the node is named something like "bosch,bme280", use "bme280":
+                name = parts.pop();
+            } else if (n.filename) {
+                name = path.basename(n.filename, '.yaml');
+            } else {
+                return null;
+            }
+
+            const completion = new vscode.CompletionItem(name, vscode.CompletionItemKind.Class);
+            completion.detail = n.name;
+            completion.documentation = n.description;
+            completion['dts-node-type'] = n;
+            completion['dts-parent'] = node;
+            return completion;
+        }).filter(n => n);
+
+        const childCompletions = node.children().map(n => {
+            const item = new vscode.CompletionItem(n.fullName, vscode.CompletionItemKind.Module);
+            item.insertText = new vscode.SnippetString(n.fullName + ' {\n\t');
+            item.insertText.appendTabstop();
+            item.insertText.appendText('\n};');
+            item.detail = n.type?.name;
+            item.documentation = n.type?.description;
+            return item;
+        });
+
 
         // commands (/command/):
         const commandStart = line.search(/\/(?:$|\w)/);
@@ -692,20 +808,10 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
         return [
             ...propCompletions,
-            anyNode,
             deleteNode,
             deleteProp,
-            ...nodes.map(n => {
-                const completion = new vscode.CompletionItem(n.name, vscode.CompletionItemKind.Class);
-                completion.insertText = new vscode.SnippetString();
-                completion.insertText.appendPlaceholder('node-name');
-                completion.insertText.appendText(` {\n\tcompatible = "${n.name}";\n\t`);
-                completion.insertText.appendTabstop();
-                completion.insertText.appendText('\n};');
-                completion.documentation = n.description;
-                completion.detail = n.title;
-                return completion;
-            }),
+            ...childCompletions,
+            ...nodeCompletions,
             ...macros,
         ];
     }

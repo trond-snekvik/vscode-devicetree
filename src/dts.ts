@@ -990,7 +990,7 @@ export class DTSCtx {
     }
 
     get macros() {
-        const macros = [];
+        const macros = new Array<Macro>();
         if (this.board) {
             macros.push(...this.board.macros);
         }
@@ -999,7 +999,7 @@ export class DTSCtx {
     }
 
     get roots() {
-        const roots = [];
+        const roots = new Array<NodeEntry>();
         if (this.board) {
             roots.push(...this.board.roots);
         }
@@ -1008,7 +1008,7 @@ export class DTSCtx {
     }
 
     get entries() {
-        const entries = [];
+        const entries = new Array<NodeEntry>();
         if (this.board) {
             entries.push(...this.board.entries);
         }

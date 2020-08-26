@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Parser, getCells, getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, StringValue, BoolValue, BytestringValue, DTSCtx } from './dts';
+import { getCells, getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, StringValue, DTSCtx } from './dts';
 import * as types from './types';
 import { DiagnosticsSet } from './diags';
 
@@ -396,7 +396,7 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
     entry.properties.forEach(p => {
         const final = node.property(p.name);
         if (p !== final) {
-            const diag = ctx.diags.pushLoc(p.loc, 'Overridden by later entry', vscode.DiagnosticSeverity.Hint);
+            const diag = ctx.diags.pushLoc(new vscode.Location(p.loc.uri, p.fullRange), 'Overridden by later entry', vscode.DiagnosticSeverity.Hint);
             diag.tags = [vscode.DiagnosticTag.Unnecessary];
             diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(final.loc, 'Active entry defined here')];
             redundantEntries++;

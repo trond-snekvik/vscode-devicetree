@@ -920,10 +920,18 @@ export class DTSCtx {
     node(name: string): Node | null {
         if (name.startsWith('&{')) {
             const path = name.match(/^&{(.*)}/);
-            return this.nodes[path?.[1]] ?? null;
+            if (!path) {
+                return;
+            }
+
+            name = path[1];
         } else if (name.startsWith('&')) {
             const ref = name.slice(1);
             return Object.values(this.nodes).find(n => n.hasLabel(ref)) ?? null;
+        }
+
+        if (!name.endsWith('/')) {
+            name += '/';
         }
 
         return this.nodes[name] ?? null;
@@ -1332,7 +1340,7 @@ export class Parser {
                 continue;
             }
 
-            const refMatch = state.match(/^(&[\w-]+)/);
+            const refMatch = state.match(/^(&[\w-]+|&{[\w@/-]+})/);
             if (refMatch) {
                 const refLoc = state.location();
                 state.skipWhitespace();

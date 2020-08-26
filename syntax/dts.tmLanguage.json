@@ -183,7 +183,7 @@
             ]
         },
         "node-ref": {
-            "begin": "(&)([\\w\\-]+)\\s*{",
+            "begin": "(&)([\\w-]+|{[\\w/@-]+})\\s*{",
             "end": "}",
             "beginCaptures": {
                 "1": {"name": "keyword.operator"},
@@ -275,7 +275,7 @@
             ]
         },
         "ref":  {
-            "match": "(&)([\\w\\-]+)",
+            "match": "(&)([\\w\\-]+|\\{[\\w/@-]+\\})",
             "captures": {
                 "1": {"name": "keyword.operator"},
                 "2": {"name": "support.class"}

@@ -1469,7 +1469,11 @@ export class Parser {
 
         // Resolve types:
         let time = process.hrtime();
-        ctx.entries.forEach(e => e.node.type = (this.types.nodeType(e.node) ?? this.types.types['base']?.[0]));
+        Object.values(ctx.nodes).forEach(node => {
+            if (!node.type) {
+                node.type = (this.types.nodeType(node) ?? this.types.types['base']?.[0]);
+            }
+        });
         time = process.hrtime(time);
         console.log(`Resolved types for ${file.uri.fsPath} in ${(time[0] * 1e9 + time[1]) / 1000000} ms`);
 

@@ -140,12 +140,6 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         this.diags = vscode.languages.createDiagnosticCollection('DeviceTree');
         this.types = new types.TypeLoader();
 
-        const timeStart = process.hrtime();
-        const bindingDirs = getBindingDirs();
-        bindingDirs.forEach(d => this.types.addFolder(d));
-        const procTime = process.hrtime(timeStart);
-        console.log(`Found ${Object.keys(this.types.types).length} bindings in ${bindingDirs.join(', ')}. ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
-
         const defines = (getConfig('deviceTree.defines') ?? {}) as {[name: string]: string};
         const includes = getConfig('deviceTree.includes') as string[] ??
             vscode.workspace.workspaceFolders.map(w => ['include', 'dts/common', 'dts/arm', 'dts'].map(i => w.uri.fsPath + '/' + i)).reduce((arr, elem) => [...arr, ...elem], []);
@@ -196,7 +190,14 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
                 ]
             });
 
-        this.parser.activate(ctx);
+        const timeStart = process.hrtime();
+        const bindingDirs = getBindingDirs();
+        Promise.all(bindingDirs.map(d => this.types.addFolder(d))).then(() => {
+            this.types.finalize();
+            const procTime = process.hrtime(timeStart);
+            console.log(`Found ${Object.keys(this.types.types).length} bindings in ${bindingDirs.join(', ')}. ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
+            this.parser.activate(ctx);
+        });
     }
 
     private setDiags(diags: DiagnosticsSet) {
@@ -324,7 +325,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             expanded += '\n};';
 
             const name = new vscode.MarkdownString('`' + node.path + '`');
-            if (!node.type.invalid) {
+            if (node.type.valid) {
                 name.appendText(' (' + node.type.description + ')');
             }
 
@@ -343,7 +344,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
             return;
         }
 
-        const type = this.types.nodeType(node);
+        const type = node.type ?? this.types.baseType;
         const prop = type.properties.find(p => p.name === symbol);
         if (prop) {
             const results: vscode.MarkedString[] = [];

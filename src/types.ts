@@ -2,10 +2,9 @@ import * as yaml from 'js-yaml';
 import * as glob from 'glob';
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { readFileSync } from 'fs';
+import { readFile } from 'fs';
 import { Node } from './dts';
 import { DiagnosticsSet } from './diags';
-
 
 export interface PropertyType {
     name: string;
@@ -21,19 +20,17 @@ export interface PropertyType {
 
 export interface NodeType {
     name: string;
-    loaded: boolean;
     compatible?: string;
     properties: PropertyType[];
-    filename: string;
+    filename?: string;
     title?: string;
-    invalid?: boolean;
+    valid: boolean;
     include?: string | string[];
     description?: string;
     'bus'?: string;
     'on-bus'?: string;
     'child-binding'?: NodeType;
 }
-
 
 const standardProperties: PropertyType[] = [
     {
@@ -153,16 +150,6 @@ const interruptController: PropertyType[] = [
     },
 ];
 
-function typeNameFromFile(filename: string) {
-    const text = readFileSync(filename, 'utf-8');
-    const compatible =  text.match(/^\s*compatible\s*:\s*"(.*?)"/m);
-    if (compatible) {
-        return compatible[1];
-    }
-
-    return path.basename(filename, '.yaml');
-}
-
 function mergeProperties(base: PropertyType[], inherited: PropertyType[]): PropertyType[] {
     if (!inherited) {
         return base;
@@ -193,7 +180,7 @@ export class TypeLoader {
         '/': [{
             name: '/',
             filename: '',
-            loaded: true,
+            valid: true,
             description: 'The devicetree has a single root node of which all other device nodes are descendants. The full path to the root node is /.',
             properties: [
                 ...standardProperties,
@@ -223,7 +210,7 @@ export class TypeLoader {
         'simple-bus': [{
             name: 'simple-bus',
             filename: '',
-            loaded: true,
+            valid: false,
             title: 'Internal I/O bus',
             description: 'System-on-a-chip processors may have an internal I/O bus that cannot be probed for devices. The devices on the bus can be accessed directly without additional configuration required. This type of bus is represented as a node with a compatible value of “simple-bus”.',
             properties: [
@@ -262,7 +249,7 @@ export class TypeLoader {
             name: '/cpus/',
             filename: '',
             title: '/cpus',
-            loaded: true,
+            valid: true,
             description: `A /cpus node is required for all devicetrees. It does not represent a real device in the system, but acts as a container for child cpu nodes which represent the systems CPUs.`,
             properties: [
                 ...standardProperties,
@@ -280,7 +267,7 @@ export class TypeLoader {
             name: '/cpus/cpu',
             filename: '',
             title: 'CPU instance',
-            loaded: true,
+            valid: true,
             description: 'A cpu node represents a hardware execution block that is sufficiently independent that it is capable of running an operating\n' +
             'system without interfering with other CPUs possibly running other operating systems.\n' +
             'Hardware threads that share an MMU would generally be represented under one cpu node. If other more complex CPU\n' +
@@ -313,7 +300,7 @@ export class TypeLoader {
             name: '/chosen/',
             title: '/Chosen node',
             filename: '',
-            loaded: true,
+            valid: true,
             description: `The /chosen node does not represent a real device in the system but describes parameters chosen or specified by the system firmware at run time. It shall be a child of the root node`,
             properties: [
                 {
@@ -375,7 +362,7 @@ export class TypeLoader {
         '/aliases/': [{
             name: '/aliases/',
             filename: '',
-            loaded: true,
+            valid: true,
             title: 'Aliases',
             description: `A devicetree may have an aliases node (/aliases) that defines one or more alias properties. The alias node shall be at the root of the devicetree and have the node name /aliases. Each property of the /aliases node defines an alias. The property name specifies the alias name. The property value specifies the full path to a node in the devicetree. For example, the property serial0 = "/simple-bus@fe000000/ serial@llc500" defines the alias serial0. Alias names shall be a lowercase text strings of 1 to 31 characters from the following set of characters.\n\nAn alias value is a device path and is encoded as a string. The value represents the full path to a node, but the path does not need to refer to a leaf node. A client program may use an alias property name to refer to a full device path as all or part of its string value. A client program, when considering a string as a device path, shall detect and use the alias.`,
             properties: []
@@ -383,22 +370,70 @@ export class TypeLoader {
     };
     folders: string[] = []
     diags: DiagnosticsSet;
+    baseType: NodeType;
 
     constructor() {
         this.diags = new DiagnosticsSet();
+        this.baseType = { name: '<unknown>', properties: standardProperties, valid: false, };
     }
 
-    addFolder(folder: string) {
+    async addFolder(folder: string) {
         this.folders.push(folder);
-        const files = glob.sync('**/*.yaml', { cwd: folder });
-        files.forEach(f => {
-            const name = typeNameFromFile(path.resolve(folder, f));
-            if (!(name in this.types)) {
-                this.types[name] = [];
-            }
+        const g = glob.sync('**/*.yaml', { cwd: folder, ignore: 'test/*' });
+        return Promise.all(g.map(file => new Promise(resolve => {
+            const filePath = path.resolve(folder, file);
+            readFile(filePath, 'utf-8', (err, out) => {
+                if (err) {
+                    console.log(`Couldn't open ${file}`);
+                } else {
+                    const tree = yaml.load(out, { json: true });
+                    const type = this.YAMLtoNode(tree);
+                    type.filename = filePath;
+                    type.valid = !!type.name;
 
-            this.types[name].push({ name: name, properties: [...standardProperties], loaded: false, filename: folder + '/' + f });
-        });
+                    if (!type.name) {
+                        type.name = path.basename(file, '.yaml');
+                    }
+                    if (type.name in this.types) {
+                        this.types[type.name].push(type);
+                    } else {
+                        this.types[type.name] = [type];
+                    }
+                }
+
+                resolve();
+            });
+        })));
+    }
+
+    finalize() {
+        Object.values(this.types).forEach(types => types.forEach(type => {
+            const addInclude = (include: string) => {
+                let includeType = this.types[path.basename(include, '.yaml')]?.[0]; // This works for like 99% of the entires
+                if (!includeType) {
+                    Object.values(this.types).some(types => types.some(t => {
+                        if (t.filename && path.basename(t.filename) === include) {
+                            includeType = t;
+                            return true;
+                        }
+                    }));
+                    if (!includeType) {
+                        return;
+                    }
+                }
+
+                type.properties = mergeProperties(type.properties, includeType.properties);
+                // load all included tree entries that aren't in the child:
+                const entries = Object.keys(includeType).filter(e => e !== 'properties' && !(e in type));
+                entries.forEach(e => type[e] = includeType[e]);
+            };
+
+            if (typeof type.include === 'string') {
+                addInclude(type.include);
+            } else if (Array.isArray(type.include)) {
+                type.include.forEach(addInclude);
+            }
+        } ));
     }
 
     get(name: string): NodeType[] {
@@ -406,65 +441,28 @@ export class TypeLoader {
             return [];
         }
 
-        this.types[name].filter(t => !t.loaded).forEach((_, i) => this.types[name][i] = this.loadYAML(this.types[name][i]));
-
         return this.types[name];
     }
 
-    YAMLtoNode(tree: any, baseType?: NodeType): NodeType {
+    YAMLtoNode(tree: any): NodeType {
         const loadedProperties: PropertyType[] = (('properties' in tree) ? Object.keys(tree['properties']).map(name => {
             return <PropertyType>{name: name, ...tree['properties'][name], isLoaded: true};
         }) : []);
 
-        const type = <NodeType>{ ...baseType, ...tree, properties: loadedProperties };
-        if (baseType) {
-            type.properties = mergeProperties(type.properties, baseType.properties);
-        }
+        const type = <NodeType>{ ...tree, properties: loadedProperties };
 
         if ('compatible' in tree) {
             type.name = tree['compatible'];
         }
 
-        if ('include' in tree) {
-            const addInclude = (include: string) => {
-                this.get(path.basename(include, '.yaml')).forEach(i => {
-                    type.properties = mergeProperties(type.properties, i.properties);
-                    // load all included tree entries that aren't in the child:
-                    const entries = Object.keys(i).filter(e => e !== 'properties' && !(e in type));
-                    entries.forEach(e => type[e] = i[e]);
-                });
-            };
-
-            if (typeof type.include === 'string') {
-                addInclude(tree.include);
-            } else {
-                type.include.forEach(addInclude);
-            }
-        }
+        type.properties = mergeProperties(type.properties, standardProperties);
 
         if ('child-binding' in tree) {
             type['child-binding'] = this.YAMLtoNode(tree['child-binding']);
         }
 
-        type.loaded = true;
-
         return type;
     }
-
-    private loadYAML(type: NodeType): NodeType {
-        try {
-            const contents = readFileSync(type.filename, 'utf-8');
-            const tree = yaml.load(contents);
-            // var tree = yaml.parse(contents, {mapAsMap: true});
-            type = this.YAMLtoNode(tree, type);
-        } catch (e) {
-            vscode.window.showWarningMessage(`Error resolving type "${type.name}": ${e}`);
-            type.loaded = true;
-        }
-
-        return type;
-    }
-
 
     nodeType(node: Node): NodeType {
         const props = node.uniqueProperties();
@@ -503,7 +501,7 @@ export class TypeLoader {
         let types = getBaseType();
 
         if (!types.length) {
-            types = [{ name: '<unknown>', filename: '', invalid: true, loaded: true, properties: [ ...standardProperties ] }];
+            types = [{ name: '<unknown>', filename: '', valid: false, properties: [ ...standardProperties ] }];
         }
 
         if (props.find(p => p.name === 'interrupt-controller')) {

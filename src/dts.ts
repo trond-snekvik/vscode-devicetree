@@ -641,9 +641,11 @@ export class Property {
                     if (v.val.every(e => e instanceof IntValue)) {
                         return 'array';
                     }
+
+                    return 'phandle-array';
                 }
 
-                return 'phandle-array';
+                return 'invalid';
             }
 
             if (v instanceof StringValue) {

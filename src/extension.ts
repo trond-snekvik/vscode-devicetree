@@ -130,7 +130,15 @@ function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString,
     snippet.appendText(';');
 }
 
-class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvider, vscode.HoverProvider, vscode.CompletionItemProvider, vscode.SignatureHelpProvider, vscode.DocumentRangeFormattingEditProvider, vscode.DocumentLinkProvider {
+class DTSEngine implements
+    vscode.DocumentSymbolProvider,
+    vscode.WorkspaceSymbolProvider,
+    vscode.DefinitionProvider,
+    vscode.HoverProvider,
+    vscode.CompletionItemProvider,
+    vscode.SignatureHelpProvider,
+    vscode.DocumentRangeFormattingEditProvider,
+    vscode.DocumentLinkProvider {
     parser: dts.Parser;
     diags: vscode.DiagnosticCollection;
     types: types.TypeLoader;
@@ -163,6 +171,8 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         const selector = <vscode.DocumentFilter>{ language: 'dts', scheme: 'file' };
         let disposable = vscode.languages.registerDocumentSymbolProvider(selector, this);
         ctx.subscriptions.push(disposable);
+        disposable = vscode.languages.registerWorkspaceSymbolProvider(this);
+        ctx.subscriptions.push(disposable);
         disposable = vscode.languages.registerDefinitionProvider([selector, <vscode.DocumentFilter>{ language: 'yaml', scheme: 'file' }], this);
         ctx.subscriptions.push(disposable);
         disposable = vscode.languages.registerHoverProvider(selector, this);
@@ -174,6 +184,7 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
         disposable = vscode.languages.registerDocumentRangeFormattingEditProvider(selector, this);
         ctx.subscriptions.push(disposable);
         disposable = vscode.languages.registerDocumentLinkProvider(selector, this);
+        ctx.subscriptions.push(disposable);
 
         vscode.languages.setLanguageConfiguration('dts',
             <vscode.LanguageConfiguration>{
@@ -257,6 +268,17 @@ class DTSEngine implements vscode.DocumentSymbolProvider, vscode.DefinitionProvi
 
         this.parser.ctx(document.uri)?.roots.forEach(addSymbol);
         return symbols;
+    }
+
+    provideWorkspaceSymbols(query: string, token: vscode.CancellationToken): vscode.ProviderResult<vscode.SymbolInformation[]> {
+        const ctx = this.parser.currCtx;
+        if (!ctx) {
+            return [];
+        }
+
+        return ctx.nodeArray()
+            .filter(n => n.entries.length > 0 )
+            .map(n => new vscode.SymbolInformation(n.fullName || '/', vscode.SymbolKind.Class, n.parent?.path ?? '', n.entries[0].nameLoc));
     }
 
     getNodeDefinition(ctx: dts.DTSCtx, document: vscode.TextDocument, position: vscode.Position): [vscode.Range, dts.Node] {

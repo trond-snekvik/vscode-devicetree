@@ -887,6 +887,20 @@ export class Node {
         this.sortedEntries.forEach(e => e.properties.forEach(p => props[p.name] = p));
         return Object.values(props);
     }
+
+    toString(expandChildren=false, indent='') {
+        let result = indent + this.fullName + ' {\n';
+        indent += '\t';
+
+        result += this.uniqueProperties().map(p => indent + p.toString() + ';\n').join('');
+        if (expandChildren) {
+            result += this.children().map(c => c.toString(expandChildren, indent));
+        } else {
+            result += this.children().map(c => indent + c.fullName + ' { /* ... */ };\n');
+        }
+
+        return result + indent + '};';
+    }
 }
 
 export class DTSCtx {
@@ -1038,6 +1052,10 @@ export class DTSCtx {
 
     get fileCount() {
         return this.overlays.length + (this.board ? 1 : 0);
+    }
+
+    toString() {
+        return this.nodeArray().map(n => n.toString(true)).join('\n\n');
     }
 }
 

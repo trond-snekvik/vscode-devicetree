@@ -335,23 +335,12 @@ class DTSEngine implements
         if (bundle) {
             const node = bundle[1];
 
-            let expanded = `${node.fullName} {`;
-
-            expanded += node.uniqueProperties().map(p => `\n\t${p.toString()};`).join('');
-            expanded += node.children().reduce((array, curr) => {
-                if (!array.find(c => c.fullName === curr.fullName)) {
-                    array.push(curr);
-                }
-                return array;
-            }, new Array<dts.Node>()).map(c => `\n\t${c.fullName} { /* ... */ };`).join('');
-            expanded += '\n};';
-
             const name = new vscode.MarkdownString('`' + node.path + '`');
             if (node.type.valid) {
                 name.appendText(' (' + node.type.description + ')');
             }
 
-            return new vscode.Hover([name, {language: 'dts', value: expanded}], bundle[0]);
+            return new vscode.Hover([name, { language: 'dts', value: node.toString() }], bundle[0]);
         }
 
         // hover property name

@@ -20,7 +20,7 @@
         ["<", ">"],
         ["\"", "\""]
     ],
-    "wordPattern": "(-?\\d+)|(0x[\\da-fA-F]+)|(&?[\\w\\-,#]+)",
+    "wordPattern": "[&#]?[\\w,@-]+",
     "indentationRules": {
         "increaseIndentPattern": "^((?!\\/\\/).)*(\\{[^}\"'`]*|\\([^)\"'`]*|\\[[^\\]\"'`]*)$",
         "decreaseIndentPattern": "^((?!.*?\\/\\*).*\\*/)?\\s*[\\}\\]].*$"

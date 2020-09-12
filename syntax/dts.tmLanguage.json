@@ -61,7 +61,6 @@
             "patterns":[
                 {"include": "#alias-node"},
                 {"include": "#chosen-node"},
-                {"include": "#cpus-node"},
                 {"include": "#node-contents"}
             ]
         },
@@ -75,8 +74,16 @@
             "name": "comment.block"
         },
         "compiler-directive": {
-            "match": "/.*?/",
-            "name": "entity.name.tag"
+            "begin": "/.*?/",
+            "end": ";",
+            "beginCaptures": {
+                "0": {"name": "entity.name.tag"}
+            },
+            "patterns": [
+                {"include": "#ref"},
+                {"include": "#node-name"},
+                {"include": "#block-comment"}
+            ]
         },
         "label": {
             "match": "([\\w\\-]+)\\s*:",
@@ -102,7 +109,7 @@
                 "1": {"name": "variable.property.nodestring"},
                 "2": {"name": "keyword.operator"},
                 "3": {"name": "keyword.operator"},
-                "4": {"name": "support.class"}
+                "4": {"name": "support.class.node-ref-prop"}
             },
             "patterns": [
                 {"include": "#ref"}
@@ -112,7 +119,7 @@
             "begin": "(aliases)\\s+{",
             "end": "}",
             "beginCaptures": {
-                "1": {"name": "support.class"}
+                "1": {"name": "support.class.alias-node"}
             },
             "patterns": [
                 {"include": "#node-ref-property"},
@@ -125,7 +132,7 @@
             "begin": "(chosen)\\s+{",
             "end": "}",
             "beginCaptures": {
-                "1": {"name": "support.class"}
+                "1": {"name": "support.class.chosen-node"}
             },
             "patterns": [
                 {"include": "#node-ref-property"},
@@ -138,7 +145,7 @@
             "begin": "(cpus)\\s+{",
             "end": "}",
             "beginCaptures": {
-                "1": {"name": "support.class"}
+                "1": {"name": "support.class.cpus-node"}
             },
             "patterns": [
                 {
@@ -153,10 +160,31 @@
                         {"include": "#node-contents"}
                     ]
                 },
-                {"include": "#node"},
                 {"include": "#properties"},
+                {"include": "#node"},
                 {"include": "#block-comment"},
                 {"include": "#comment"}
+            ]
+        },
+        "node-name": {
+            "match": "([\\w\\-,+\\.]+)(?:(@)\\s*([\\da-fA-F]+))?",
+            "captures": {
+                "1": {"name": "support.class.node-name"},
+                "2": {"name": "keyword.operator"},
+                "3": {"name": "constant.numeric"}
+            }
+        },
+        "node-block": {
+            "begin": "{",
+            "end": "}",
+            "patterns":[
+                {"include": "#node-contents"}
+            ]
+        },
+        "node": {
+            "patterns":[
+                {"include": "#node-name"},
+                {"include": "#node-block"}
             ]
         },
         "node-contents": {
@@ -165,21 +193,9 @@
                 {"include": "#block-comment"},
                 {"include": "#compiler-directive"},
                 {"include": "#node-ref"},
-                {"include": "#node"},
                 {"include": "#label"},
-                {"include": "#properties"}
-            ]
-        },
-        "node": {
-            "begin": "([\\w\\-,+\\.]+)\\s*(?:(@)\\s*([\\da-fA-F]+))?\\s*{",
-            "end": "}",
-            "beginCaptures": {
-                "1": {"name": "support.class"},
-                "2": {"name": "keyword.operator"},
-                "3": {"name": "constant.numeric"}
-            },
-            "patterns":[
-                {"include": "#node-contents"}
+                {"include": "#properties"},
+                {"include": "#node"}
             ]
         },
         "node-ref": {
@@ -187,7 +203,7 @@
             "end": "}",
             "beginCaptures": {
                 "1": {"name": "keyword.operator"},
-                "2": {"name": "support.class"}
+                "2": {"name": "support.class.node-ref"}
             },
             "patterns":[
                 {"include": "#node-contents"}
@@ -271,15 +287,17 @@
                 {"include": "#ref"},
                 {"include": "#paren-expr"},
                 {"include": "#number"},
+                {"match": "\\w+", "name": "entity.name.tag"},
                 {"include": "#block-comment"},
                 {"match": ";", "name": "invalid.illegal"}
             ]
         },
         "ref":  {
-            "match": "(&)([\\w\\-]+|\\{[\\w/@-]+\\})",
+            "match": "(&)(?:([\\w\\-]+)|\\{([\\w/@-]+)\\})",
             "captures": {
                 "1": {"name": "keyword.operator"},
-                "2": {"name": "support.class"}
+                "2": {"name": "support.class.ref"},
+                "3": {"name": "support.class.ref"}
             }
         },
         "string": {

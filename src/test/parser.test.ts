@@ -3,8 +3,8 @@ import * as assert from 'assert';
 import { after } from 'mocha';
 import * as path from 'path';
 import * as fs from 'fs';
-import { preprocess, Macro } from '../preprocessor';
-import { evaluateExpr } from '../dts';
+import { preprocess, Macro, MacroInstance } from '../preprocessor';
+import { evaluateExpr, Line } from '../dts';
 import { DiagnosticsSet } from '../diags';
 // import * as myExtension from '../extension';
 
@@ -35,6 +35,34 @@ suite('Parser test suite', () => {
 		assert.equal(diags.length, 1, JSON.stringify(diags));
 		assert.equal(diags[0].uri.fsPath, path.resolve(extensionDevelopmentPath + '/src/test/test.invalid.c'));
 		assert.equal(diags[0].diags.length, fs.readFileSync(diags[0].uri.fsPath).toString().match(/\/\/ fail/g).length, diags.toString());
+	});
+
+	test('Line remap', () => {
+		const line = new Line('foo MACRO_1 MACRO_2 abc', 0, vscode.Uri.file('test'), [
+			new MacroInstance(new Macro('MACRO_1', 'bar'), 'MACRO_1', 'bar', 4),
+			new MacroInstance(new Macro('MACRO_2', '1234'), 'MACRO_2', '1234', 12),
+		]);
+
+		assert.equal(line.text, 'foo bar 1234 abc');
+		assert.equal(line.rawPos(0, true), 0);
+		assert.equal(line.rawPos(4, true), 4); // start of first macro
+		assert.equal(line.rawPos(5, true), 4); // middle of first macro
+		assert.equal(line.rawPos(6, true), 4); // middle of first macro
+		assert.equal(line.rawPos(7, true), 11); // right after first macro
+		assert.equal(line.rawPos(8, true), 12); // start of second macro
+		assert.equal(line.rawPos(11, true), 12); // middle of second macro
+		assert.equal(line.rawPos(12, true), 19); // after second macro
+		assert.equal(line.rawPos(13, false), 20); // after second macro
+
+		assert.equal(line.rawPos(0, false), 0);
+		assert.equal(line.rawPos(4, false), 11); // start of first macro
+		assert.equal(line.rawPos(5, false), 11); // middle of first macro
+		assert.equal(line.rawPos(6, false), 11); // middle of first macro
+		assert.equal(line.rawPos(7, false), 11); // right after first macro
+		assert.equal(line.rawPos(8, false), 19); // start of second macro
+		assert.equal(line.rawPos(11, false), 19); // middle of second macro
+		assert.equal(line.rawPos(12, false), 19); // after second macro
+		assert.equal(line.rawPos(13, false), 20); // after second macro
 	});
 
 	test('Expressions', () => {

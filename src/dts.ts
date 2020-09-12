@@ -17,7 +17,7 @@ abstract class PropertyValue {
         this.loc = loc;
     }
 
-    toString() {
+    toString(): string {
         return this.val.toString();
     }
 }
@@ -65,17 +65,18 @@ export class IntValue extends PropertyValue {
         }
     }
 
-    toString(raw=false) {
-        const val = this.hex ? `0x${this.val.toString(16)}` : this.val;
+    toString(raw=false): string {
+        const val = this.hex ? `0x${this.val.toString(16)}` : this.val.toString();
         return raw ? val : `< ${val} >`;
     }
 }
 
 export class Expression extends IntValue {
     raw: string;
+    actual: string;
 
-    private constructor(raw: string, loc: vscode.Location) {
-        super(eval(raw), loc);
+    private constructor(raw: string, actual: any, loc: vscode.Location) {
+        super(actual, loc);
         this.raw = raw;
     }
 
@@ -103,9 +104,10 @@ export class Expression extends IntValue {
         }
 
         const loc = state.location(start);
+        const raw = state.raw(loc);
 
         try {
-            return new Expression(text, loc);
+            return new Expression(raw, eval(text), loc);
         } catch (e) {
             state.pushDiag(`Unable to evaluate expression`, vscode.DiagnosticSeverity.Error, loc);
         }
@@ -205,32 +207,37 @@ export class BytestringValue extends PropertyValue {
 
 export class PHandle extends PropertyValue {
     val: string; // includes & (e.g. &gpio0)
-    isRef: boolean;
+    kind: 'ref' | 'pathRef' | 'string';
 
-    private constructor(value: string, isRef: boolean, loc: vscode.Location) {
+    private constructor(value: string, isRef: boolean, loc: vscode.Location, kind: 'ref' | 'pathRef' | 'string') {
         super(value, loc);
+        this.kind = kind;
     }
 
     static match(state: ParserState): PHandle {
         let phandle = state.match(/^&\{([\w/@-]+)\}/); // path reference
         if (phandle) {
-            return new PHandle(phandle[1], false, state.location());
+            return new PHandle(phandle[1], false, state.location(), 'pathRef');
         }
 
         phandle = state.match(/^&[\w-]+/);
         if (phandle) {
-            return new PHandle(phandle[0], true, state.location());
+            return new PHandle(phandle[0], true, state.location(), 'ref');
         }
         // can be path:
         phandle = state.match(/^"(.+?)"/); // deprecated?
         if (phandle) {
-            return new PHandle(phandle[1], false, state.location());
+            return new PHandle(phandle[1], false, state.location(), 'string');
         }
     }
 
     toString(raw=true) {
-        if (this.isRef) {
+        if (this.kind === 'ref') {
             return raw ? this.val : `< ${this.val} >`;
+        }
+
+        if (this.kind === 'pathRef') {
+            return raw ? `&{${this.val}}` : `< &{${this.val}} >`;
         }
 
         return `"${this.val}"`;
@@ -274,7 +281,6 @@ export class Line {
     raw: string;
     text: string;
     number: number;
-    uri: vscode.Uri;
     macros: MacroInstance[];
     location: vscode.Location;
 
@@ -282,35 +288,75 @@ export class Line {
         return this.text.length;
     }
 
-    remap(range: vscode.Range): vscode.Range;
-    remap(position: vscode.Position): vscode.Position;
+    rawPos(range: vscode.Range): vscode.Range;
+    rawPos(position: vscode.Position, earliest: boolean): number;
+    rawPos(offset: number, earliest: boolean): number;
 
-    remap(loc: vscode.Position | vscode.Range) {
+    /**
+     * Remap a location in the processed text to a location in the raw input text (real human readable location)
+     *
+     * For instance, if a processed line is
+     *
+     * foo bar 1234
+     *
+     * and the unprocessed line is
+     *
+     * foo MACRO_1 MACRO_2
+     *
+     * the outputs should map like this:
+     *
+     * remap(0) -> 0
+     * remap(4) -> 4 (from the 'b' in bar)
+     * remap(5) -> 4 (from the 'a' in bar)
+     * remap(5, true) -> 6 (from the 'a' in bar)
+     * remap(9) -> 8 (from the '2' in 1234)
+     *
+     * @param loc Location in processed text
+     * @param earliest Whether to get the earliest matching position
+     */
+    rawPos(loc: vscode.Position | vscode.Range | number, earliest=true) {
         if (loc instanceof vscode.Position) {
-            let offset = 0;
-            this.macros.forEach(m => {
-                if (m.start < loc.character) {
-                    if (m.insert.length > loc.character - m.start) {
-                        offset += loc.character - m.start;
-                    } else {
-                        offset += m.raw.length - m.insert.length;
-                    }
-                }
-            });
-
-            return new vscode.Position(loc.line, loc.character - offset);
-        } else {
-            return new vscode.Range(this.remap(loc.start), this.remap(loc.end));
+            return new vscode.Position(loc.line, this.rawPos(loc.character, earliest));
         }
+
+        if (loc instanceof vscode.Range) {
+            return new vscode.Range(loc.start.line, this.rawPos(loc.start, true), loc.end.line, this.rawPos(loc.end, false));
+        }
+
+        this.macros.find(m => {
+            loc = <number>loc; // Just tricking typescript :)
+            if (m.start > loc) {
+                return true; // As macros are sorted by their start pos, there's no need to go through the rest
+            }
+
+            // Is inside macro
+            if (loc < m.start + m.insert.length) {
+                loc = m.start;
+                if (!earliest) {
+                    loc += m.raw.length; // clamp to end of macro
+                }
+                return true;
+            }
+
+            loc += m.raw.length - m.insert.length;
+        });
+
+        return loc;
     }
 
+    contains(uri: vscode.Uri, pos: vscode.Position) {
+        return uri.toString() === this.location.uri.toString() && this.location.range.contains(pos);
+    }
+
+    get uri() {
+        return this.location.uri;
+    }
 
     constructor(raw: string, number: number, uri: vscode.Uri, macros: MacroInstance[]=[]) {
         this.raw = raw;
         this.number = number;
-        this.uri = uri;
-        this.macros = macros;
-        this.location = new vscode.Location(this.uri, new vscode.Range(this.number, 0, this.number, this.raw.length));
+        this.macros = macros.sort((a, b) => a.start - b.start);
+        this.location = new vscode.Location(uri, new vscode.Range(this.number, 0, this.number, this.raw.length));
         this.text = MacroInstance.process(raw, macros);
     }
 }
@@ -366,7 +412,30 @@ class ParserState {
             begin = start.col;
         }
 
-        return new vscode.Location(endLine.uri, new vscode.Range(startLine.number, begin, endLine.number, end));
+        return new vscode.Location(endLine.uri, new vscode.Range(startLine.number, startLine.rawPos(begin, true), endLine.number, endLine.rawPos(end, false)));
+    }
+
+    getLine(uri: vscode.Uri, pos: vscode.Position) {
+        return this.lines.find(l => l.contains(uri, pos));
+    }
+
+    raw(loc: vscode.Location) {
+        if (loc.range.isSingleLine) {
+            return this.getLine(loc.uri, loc.range.start)?.raw.slice(loc.range.start.character, loc.range.end.character) ?? '';
+        }
+
+        let i = this.lines.findIndex(l => l.contains(loc.uri, loc.range.start));
+        if (i < 0) {
+            return '';
+        }
+
+        let content = this.lines[i].raw.slice(loc.range.start.character);
+        while (!this.lines[++i].contains(loc.uri, loc.range.end)) {
+            content += this.lines[i].raw;
+        }
+
+        content += this.lines[i].raw.slice(0, loc.range.end.character);
+        return content;
     }
 
     pushDiag(message: string, severity: vscode.DiagnosticSeverity=vscode.DiagnosticSeverity.Error, loc?: vscode.Location): vscode.Diagnostic {
@@ -541,15 +610,15 @@ export class Property {
         this.fullRange = new vscode.Range(loc.range.start, state.location().range.end);
     }
 
-    toString(): string {
+    toString(indent=0): string {
         if (this.value.length === 1 && this.value[0] instanceof BoolValue) {
             return `${this.name}`;
         }
 
-        return `${this.name} = ${this.valueString()}`;
+        return `${this.name} = ${this.valueString(indent + this.name.length + 3)}`;
     }
 
-    valueString(): string {
+    valueString(indent=0): string {
         if (this.value === undefined) {
             return '?';
         }
@@ -558,7 +627,12 @@ export class Property {
             return 'true';
         }
 
-        return this.value.map(v => v.toString()).join(', ');
+        const values = this.value.map(v => v.toString());
+        if (values.length > 1 && indent + values.join(', ').length > 80) {
+            return values.join(',\n' + ' '.repeat(indent));
+        }
+
+        return values.join(', ');
     }
 
     get valueLoc() {
@@ -789,6 +863,44 @@ export class DTSFile {
     getPropertyAt(pos: vscode.Position, uri: vscode.Uri): Property {
         return this.getEntryAt(pos, uri)?.properties.find(p => p.fullRange.contains(pos));
     }
+
+    addNode(path: string, properties: { [name: string]: string } = {}) {
+        if (path.endsWith('/')) {
+            path = path.slice(0, path.length);
+        }
+
+        const newComponents = [];
+        let existing: NodeEntry;
+        const p = path.split('/');
+        while (p.length) {
+            const fullPath = p.join('/');
+            existing = this.entries.find(e => e.node.path === fullPath);
+            if (existing) {
+                break;
+            }
+
+            p.pop();
+            newComponents.push(fullPath);
+        }
+
+        while (!existing && newComponents.length) {
+            const component = newComponents.pop();
+            const node = this.ctx.node(component);
+            if (!node) {
+                return; // Assert?
+            }
+
+            if (node.labels().length > 0 || !node.parent) {
+                existing = new NodeEntry(null, node, null, this, this.entries.length);
+            }
+        }
+
+        if (!existing.loc) {
+            // Should
+        }
+
+
+    }
 }
 
 export class NodeEntry {
@@ -839,6 +951,7 @@ export class Node {
             this.path = parent.path + this.fullName + '/';
         } else {
             this.path = '/';
+            this.fullName = '/';
         }
 
         this.parent = parent;
@@ -890,16 +1003,23 @@ export class Node {
 
     toString(expandChildren=false, indent='') {
         let result = indent + this.fullName + ' {\n';
-        indent += '\t';
+        indent += '    ';
 
-        result += this.uniqueProperties().map(p => indent + p.toString() + ';\n').join('');
-        if (expandChildren) {
-            result += this.children().map(c => c.toString(expandChildren, indent));
-        } else {
-            result += this.children().map(c => indent + c.fullName + ' { /* ... */ };\n');
+        const props = this.uniqueProperties();
+        const children = this.children();
+        result += props.map(p => indent + p.toString(indent.length) + ';\n').join('');
+
+        if (props.length && children.length) {
+            result += '\n';
         }
 
-        return result + indent + '};';
+        if (expandChildren) {
+            result += children.map(c => c.toString(expandChildren, indent) + '\n').join('\n');
+        } else {
+            result += children.map(c => indent + c.fullName + ' { /* ... */ };\n').join('\n');
+        }
+
+        return result + indent.slice(4) + '};';
     }
 }
 
@@ -1055,7 +1175,7 @@ export class DTSCtx {
     }
 
     toString() {
-        return this.nodeArray().map(n => n.toString(true)).join('\n\n');
+        return this.root?.toString(true) ?? '';
     }
 }
 
@@ -1066,7 +1186,6 @@ export class Parser {
     private appCtx: DTSCtx[];
     private boardCtx: DTSCtx[]; // Raw board contexts, for when the user just opens a .dts or .dtsi file without any overlay
     private types: TypeLoader;
-    private active=false;
     private changeEmitter: vscode.EventEmitter<DTSCtx>;
     onChange: vscode.Event<DTSCtx>;
     currCtx?: DTSCtx;
@@ -1142,7 +1261,7 @@ export class Parser {
     }
 
     private async onDidOpen(doc: vscode.TextDocument) {
-        if (doc.languageId !== 'dts') {
+        if (doc.uri.scheme !== 'file' || doc.languageId !== 'dts') {
             return;
         }
 
@@ -1263,7 +1382,6 @@ export class Parser {
         // ctx.subscriptions.push(vscode.workspace.onDidOpenTextDocument(doc => notActive(() => this.onDidOpen(doc))));
         ctx.subscriptions.push(vscode.workspace.onDidChangeTextDocument(doc => this.onDidChange(doc)));
         ctx.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(e => this.onDidChangetextEditor(e)));
-
         vscode.window.visibleTextEditors.forEach(e => this.onDidOpen(e.document));
     }
 

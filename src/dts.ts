@@ -92,7 +92,7 @@ export class Expression extends IntValue {
         while (level !== 0) {
             m = state.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+/*-]|\s*|0x[\da-fA-F]+|[\d.]+)\s*)*([()])/);
             if (!m) {
-                state.pushDiag(`Unterminated expression`);
+                state.pushDiag(`Unterminated expression`, vscode.DiagnosticSeverity.Error);
                 break;
             }
             text += m[0];
@@ -146,13 +146,15 @@ export class ArrayValue extends PropertyValue {
                 continue;
             }
 
-            const unexpectedToken = state.skipToken();
-            if (unexpectedToken.match(/[;,]/)) {
+            const unexpectedToken = state.peek();
+            if (unexpectedToken[0].match(/^[;,]/)) {
                 state.pushDiag(`Unterminated expression`, vscode.DiagnosticSeverity.Error, state.location(start));
-                break;
+                state.pushInsertAction('Add closing bracket', ' >', state.location()).isPreferred = true;
+            } else {
+                state.pushDiag(`Unexpected token`, vscode.DiagnosticSeverity.Error);
             }
 
-            state.pushDiag(`Unexpected token`, vscode.DiagnosticSeverity.Error);
+            break;
         }
 
         return new ArrayValue(values, state.location(start));
@@ -206,7 +208,7 @@ export class BytestringValue extends PropertyValue {
 }
 
 export class PHandle extends PropertyValue {
-    val: string; // includes & (e.g. &gpio0)
+    val: string;
     kind: 'ref' | 'pathRef' | 'string';
 
     private constructor(value: string, isRef: boolean, loc: vscode.Location, kind: 'ref' | 'pathRef' | 'string') {
@@ -364,55 +366,28 @@ export class Line {
 type Offset = { line: number, col: number };
 
 class ParserState {
+    readonly token = /^[#-\w]+|./;
     macros: Macro[];
     private offset: Offset;
-    private prevMatch: string;
+    private prevRange: { start: Offset, length: number };
     diags: DiagnosticsSet;
     includes: IncludeStatement[];
     lines: Line[];
     uri: vscode.Uri;
 
-    private getPrevMatchLine() {
-        if (this.offset.col) {
-            return this.lines[this.offset.line];
-        }
-
-        if (this.offset.line >= 1) {
-            return this.lines[this.offset.line - 1];
-        }
-
-        return this.lines[0];
-    }
-
     location(start?: Offset) {
-        let begin: number;
-        let end: number;
-        const endLine = this.getPrevMatchLine();
-        let startLine = endLine;
-        if (start) {
-            startLine = this.lines[start.line];
-            // Can't range across multiple files, revert to the prevMatch to get at least a partially correct result:
-            if (startLine.uri.toString() !== endLine.uri.toString()) {
-                startLine = endLine;
-            }
+        if (!start) {
+            start = this.prevRange.start;
         }
 
-        if (this.offset.col) {
-            begin = this.offset.col - this.prevMatch.length;
-            end = this.offset.col;
-        } else if (this.offset.line >= 1) {
-            begin = this.lines[this.offset.line - 1].length - this.prevMatch.length;
-            end = this.lines[this.offset.line - 1].length;
-        } else {
-            begin = 0;
-            end = this.lines[0].length;
-        }
+        const end = <Offset>{ line: this.prevRange.start.line, col: this.prevRange.start.col + this.prevRange.length };
 
-        if (start) {
-            begin = start.col;
-        }
+        const startLine = this.lines[start.line];
+        const endLine = this.lines[end.line];
 
-        return new vscode.Location(endLine.uri, new vscode.Range(startLine.number, startLine.rawPos(begin, true), endLine.number, endLine.rawPos(end, false)));
+        return new vscode.Location(startLine.uri,
+                                   new vscode.Range(startLine.number, startLine.rawPos(start.col, true),
+                                                    endLine.number, endLine.rawPos(end.col, false)));
     }
 
     getLine(uri: vscode.Uri, pos: vscode.Position) {
@@ -446,6 +421,40 @@ class ParserState {
         return this.diags.push(loc.uri, new vscode.Diagnostic(loc.range, message, severity));
     }
 
+    pushAction(title: string, kind?: vscode.CodeActionKind): vscode.CodeAction {
+        return this.diags.pushAction(new vscode.CodeAction(title, kind));
+    }
+
+    pushInsertAction(title: string, insert: string, loc?: vscode.Location): vscode.CodeAction {
+        if (!loc) {
+            loc = this.location();
+        }
+
+        const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+        action.edit = new vscode.WorkspaceEdit();
+        action.edit.insert(loc.uri, loc.range.end, insert);
+
+        return this.diags.pushAction(action);
+    }
+
+    pushDeleteAction(title: string, loc?: vscode.Location): vscode.CodeAction {
+        if (!loc) {
+            loc = this.location();
+        }
+
+        const action = new vscode.CodeAction(title, vscode.CodeActionKind.Refactor);
+        action.edit = new vscode.WorkspaceEdit();
+        action.edit.delete(loc.uri, loc.range);
+
+        return this.diags.pushAction(action);
+    }
+
+    pushSemicolonAction(loc?: vscode.Location): vscode.CodeAction {
+        const action = this.pushInsertAction('Add semicolon', ';', loc);
+        action.isPreferred = true;
+        return action;
+    }
+
     private replaceDefines(text: string, loc: vscode.Location) {
         let macros = new Array<MacroInstance>();
         this.macros.filter(d => !d.undef).forEach(d => {
@@ -475,16 +484,17 @@ class ParserState {
         return 0;
     }
 
-    match(pattern: RegExp): RegExpMatchArray | undefined {
-        const match = this.peek(pattern);
+    match(pattern?: RegExp): RegExpMatchArray | undefined {
+        const match = this.peek(pattern ?? this.token);
         if (match) {
+            this.prevRange.start = { ...this.offset };
+            this.prevRange.length = match[0].length;
+
             this.offset.col += match[0].length;
             if (this.offset.col === this.lines[this.offset.line].length) {
                 this.offset.col = 0;
                 this.offset.line++;
             }
-
-            this.prevMatch = match[0];
         }
 
         return match;
@@ -499,12 +509,17 @@ class ParserState {
     }
 
     skipWhitespace() {
+        const prevRange = { ...this.prevRange };
+
         while (this.match(/^\s+/));
+
+        /* Ignore whitespace in diagnostics ranges */
+        this.prevRange = prevRange;
         return !this.eof();
     }
 
     skipToken() {
-        const match = this.match(/^[#-\w]+|./);
+        const match = this.match(this.token);
         if (!match) {
             this.offset.line = this.lines.length;
             return '';
@@ -513,16 +528,26 @@ class ParserState {
         return match[0];
     }
 
-    peek(pattern: RegExp) {
+    peek(pattern?: RegExp) {
         if (this.offset.line >= this.lines.length) {
             return undefined;
         }
 
-        return this.next.match(pattern);
+        return this.next.match(pattern ?? this.token);
+    }
+
+    peekLocation(pattern?: RegExp): vscode.Location {
+        const match = this.peek(pattern ?? this.token);
+        if (!match) {
+            return undefined;
+        }
+
+        const prev = this.location();
+        return new vscode.Location(prev.uri, new vscode.Range(prev.range.end, new vscode.Position(prev.range.end.line, prev.range.end.character + match[0].length)));
     }
 
     freeze(): Offset {
-        return { ... this.offset };
+        return { ...this.offset };
     }
 
     since(start: Offset) {
@@ -547,6 +572,7 @@ class ParserState {
         this.uri = uri;
         this.diags = diags;
         this.offset = {line: 0, col: 0};
+        this.prevRange = { start: this.offset, length: 0 };
         this.lines = lines;
         this.includes = includes;
         this.macros = macros;
@@ -557,15 +583,27 @@ function parsePropValue(state: ParserState) {
     const elems: PropertyValue[] = [];
 
     const valueTypes = [ArrayValue, StringValue, BytestringValue, PHandle];
+    let lastValidLoc = state.location();
+    let missingComma: vscode.Location;
 
     while (state.skipWhitespace()) {
         if (state.peek(/^;/)) {
             break;
         }
 
+        if (missingComma) {
+            state.pushDiag(`Expected comma between property values`, vscode.DiagnosticSeverity.Error, missingComma);
+            state.pushInsertAction('Separate values by comma', ',', missingComma).isPreferred = true;
+            missingComma = null;
+        }
+
         if (elems.length > 0) {
-            if (!state.match(/^,\s*/)) {
-                state.pushDiag(`Expected , or ;`);
+            if (!state.match(/^,/)) {
+                /* Found a missing comma, but will only emit comma error if we manage
+                 * to parse another property value, as this could also just mean a missing
+                 * semicolon.
+                 */
+                missingComma = state.location();
             }
 
             state.skipWhitespace();
@@ -575,15 +613,26 @@ function parsePropValue(state: ParserState) {
         valueTypes.find(type => match = type.match(state));
         if (match) {
             elems.push(match);
+            lastValidLoc = state.location();
             continue;
         }
 
-        if (state.peek(/^;/)) {
-            break;
+        // Easy to miss brackets around numbers.
+        const number = state.match(/^(0x[\da-fA-F]+|\d+)/);
+        if (number) {
+            const loc = state.location();
+            state.pushDiag('Missing < > brackets around number', vscode.DiagnosticSeverity.Error);
+            const action = state.pushAction('Add brackets', vscode.CodeActionKind.QuickFix);
+            action.edit = new vscode.WorkspaceEdit();
+            action.edit.replace(loc.uri, loc.range, '< ' + number[0] + ' >');
+            action.isPreferred = true;
+            // Don't want to continue parsing, as this an invalid value.
         }
 
-        state.skipToken();
-        state.pushDiag(`Unexpected token in property value`);
+        /* As none of the value types matched, there's a format error in this value.
+         * We'll just exit without consuming the next token, as this is likely a missing semicolon.
+         */
+        break;
     }
 
     if (elems.length === 0) {
@@ -698,7 +747,7 @@ export class Property {
 
     get pHandleArray() {
         if (this.value.every(v => v instanceof ArrayValue)) {
-            return this.value[0].val as ArrayValue[];
+            return this.value as ArrayValue[];
         }
     }
 
@@ -706,6 +755,215 @@ export class Property {
         if (this.value.every(v => v instanceof StringValue)) {
             return this.value.map(v => v.val) as string[];
         }
+    }
+
+    /** Get the entries of the property.
+     *  Normally, the entries are split into their own ArrayValues, but they could also be merged to one array value.
+     *  I.e., the following is equivalent:
+     *  <&gpio0 1 2>, <&gpio0 2 3>
+     *  <&gpio0 1 2 &gpio0 2 3>
+     *
+     *  Both are values with two entries:
+     *  [&gpio0, 1, 2], [&gpio0, 2, 3]
+     */
+    get entries() {
+        const val = this.pHandleArray;
+        if (!val || !val.length) {
+            return;
+        }
+
+        const entries = new Array<{ target: PHandle, cells: IntValue[] }>();
+
+        val.forEach(v => {
+            let i = 0;
+            while (i < v.val.length) {
+                const target = v.val[i++];
+                if (!(target instanceof PHandle)) {
+                    break;
+                }
+
+                let count = v.val.slice(i).findIndex(v => v instanceof PHandle);
+                if (count === -1) {
+                    count = v.val.length - i;
+                }
+                const cells = v.val.slice(i, i + count);
+                if (cells.some(c => !(c instanceof IntValue))) {
+                    break;
+                }
+
+                entries.push({ target, cells: <IntValue[]>cells });
+                i += count;
+            }
+        });
+
+        return entries;
+    }
+    get regs() {
+        const val = this.pHandleArray;
+        if (!val || !val.length) {
+            return;
+        }
+
+        const entries = new Array<{ addrs: IntValue[], sizes: IntValue[] }>();
+
+        const addrCells = this.entry.parent?.node.addrCells() ?? 2;
+        const sizeCells = this.entry.parent?.node.sizeCells() ?? 1;
+
+        val.forEach(v => {
+            for (let i = 0; i + addrCells + sizeCells <= v.val.length; i += sizeCells) {
+                const addrs = v.val.slice(i, i + addrCells);
+                if (!addrs.every(a => a instanceof IntValue)) {
+                    break;
+                }
+
+                i += addrCells;
+
+                const sizes = v.val.slice(i, i + sizeCells);
+                if (!sizes.every(a => a instanceof IntValue)) {
+                    break;
+                }
+
+                entries.push({ addrs: <IntValue[]>addrs, sizes: <IntValue[]> sizes });
+            }
+        });
+
+        return entries;
+    }
+
+    get nexusMap() {
+        if (!this.name.endsWith('-map')) {
+            return;
+        }
+
+        const val = this.pHandleArray;
+        if (!val || !val.length) {
+            return [];
+        }
+
+        const map = new Array<{ in: IntValue[], target: PHandle, out: IntValue[] }>();
+
+        const targetIdx = val[0].val.findIndex(v => v instanceof PHandle);
+        if (targetIdx === -1) {
+            return [];
+        }
+
+        val.forEach(v => {
+            let i = 0;
+            while (i + targetIdx + 1 < v.val.length) {
+                const inputCells = v.val.slice(i, i + targetIdx);
+                if (inputCells.some(c => !(c instanceof IntValue))) {
+                    break;
+                }
+
+                i += targetIdx;
+
+                const target = v.val[i++];
+                if (!(target instanceof PHandle)) {
+                    break;
+                }
+
+                let outCnt = v.val.slice(i).findIndex(c => !(c instanceof IntValue));
+                if (outCnt === -1) {
+                    outCnt = v.val.length - i;
+                } else {
+                    outCnt -= targetIdx; // Accounting for input cells on next entry
+                }
+
+                if (outCnt < 0) {
+                    break;
+                }
+
+                const outputCells = v.val.slice(i, i + outCnt);
+                if (outputCells.some(c => c instanceof PHandle)) {
+                    break;
+                }
+
+                map.push({in: <IntValue[]>inputCells, target: target, out: <IntValue[]>outputCells});
+                i += outCnt;
+            }
+        });
+
+        return map;
+    }
+
+    /* Get the expected cellnames for this property. */
+    cellNames(ctx: DTSCtx): string[][] {
+
+        const arr = this.pHandleArray;
+        if (!arr) {
+            return [];
+        }
+
+        return this.pHandleArray.map(arr => {
+            const contents = arr.val;
+
+            if (this.name === 'reg') {
+                const addrCells = this.entry.node.parent?.addrCells() ?? 2;
+                const sizeCells = this.entry.node.parent?.sizeCells() ?? 1;
+                return [...Array(addrCells).fill('addr'), ...Array(sizeCells).fill('size')];
+            }
+
+            if (this.name === 'ranges') {
+                const addrCells = this.entry.node.addrCells();
+                const parentAddrCells = this.entry.node.parent?.addrCells() ?? 2;
+                const sizeCells = this.entry.node.sizeCells();
+                return [...Array(addrCells).fill('child-addr'), ...Array(parentAddrCells).fill('parent-addr'), ...Array(sizeCells).fill('size')];
+            }
+
+            // Get cells from parents:
+            if (this.name.endsWith('s')) {
+                const parentName = this.entry.node.property(this.name.slice(0, this.name.length - 1) + '-parent')?.pHandle?.val;
+                if (parentName) {
+                    const parent = ctx.node(parentName);
+                    const cellCount = parent?.cellCount(this.name);
+                    if (cellCount !== undefined) {
+                        const cells = new Array(cellCount).fill('cell').map((c, i) => `${c}-${i}`);
+                        (<string[]>parent.type?.[cellName(this.name)])?.forEach((name, i) => cells[i] = name);
+                        return cells;
+                    }
+                }
+            }
+
+            // nexus node:
+            if (this.name.endsWith('-map')) {
+                const inputCells = contents.findIndex(v => v instanceof PHandle);
+                if (inputCells >= 0) {
+                    if (this.name === 'interrupt-map') {
+                        const interruptSpec = new Array(this.entry.node.property('#interrupt-cells')?.number ?? 0).fill('irq-in');
+                        const addrNames = new Array(inputCells - interruptSpec.length).fill('addr-in');
+                        const refNode = ctx.node(contents[inputCells]?.val as string);
+                        if (refNode) {
+                            const outputAddrs = new Array(refNode.addrCells()).fill(`addr-out`);
+                            const outputNames = new Array(refNode.property('#interrupt-cells')?.number ?? 0).fill('irq-out');
+                            return [...addrNames, ...interruptSpec, '&target', ...outputAddrs, ...outputNames];
+                        }
+
+                        return [...addrNames, ...interruptSpec, '&target'];
+
+                    } else {
+                        const inputNames = new Array(inputCells).fill('input');
+                        this.entry.node.refCellNames(this.name)?.slice(0, inputCells).forEach((c, i) => inputNames[i] = c);
+                        const outputNames = ctx.node(contents[inputCells]?.val as string)?.refCellNames(this.name) ?? [];
+                        return [...inputNames, '&target', ...outputNames];
+                    }
+                }
+            }
+
+            // Get names from referenced nodes:
+            let refCells = [];
+            return contents.map(c => {
+                if (c instanceof PHandle) {
+                    refCells = ctx.node(c.val)?.refCellNames(this.name)?.reverse() ?? [];
+                    return c.toString();
+                }
+
+                if (refCells.length) {
+                    return refCells.pop();
+                }
+
+                return 'cell';
+            });
+        });
     }
 
     type(): string {
@@ -925,12 +1183,20 @@ export class NodeEntry {
         this.file = ctx;
         this.number = number;
     }
+
+    get depth(): number {
+        if (!this.parent) {
+            return 0;
+        }
+
+        return this.parent.depth + 1;
+    }
 }
 
 export class Node {
     name: string;
     fullName: string;
-    deleted: boolean;
+    deleted?: vscode.Location;
     parent?: Node;
     path: string;
     address?: number;
@@ -949,14 +1215,15 @@ export class Node {
 
         if (parent) {
             this.path = parent.path + this.fullName + '/';
-        } else {
+        } else if (!name.startsWith('&')) {
             this.path = '/';
             this.fullName = '/';
+        } else {
+            this.path = this.fullName;
         }
 
         this.parent = parent;
         this.name = name;
-        this.deleted = false;
         this.entries = [];
     }
 
@@ -995,6 +1262,37 @@ export class Node {
         return this.uniqueProperties().find(e => e.name === name);
     }
 
+    addrCells(): number {
+        return this.property('#address-cells')?.number ?? 2;
+    }
+
+    sizeCells(): number {
+        return this.property('#size-cells')?.number ?? 1;
+    }
+
+    regs() {
+        return this.property('reg')?.regs;
+    }
+
+    cellCount(prop: string) {
+        return this.property('#' + cellName(prop))?.number ?? 1;
+    }
+
+    /** Cell names exposed when the node is referenced */
+    refCellNames(prop: string): string[] {
+        const typeCellNames = this.type?.[cellName(prop)];
+        if (typeCellNames) {
+            return typeCellNames;
+        }
+
+        const count = this.property('#' + cellName(prop))?.number;
+        if (count === undefined) {
+            return;
+        }
+
+        return new Array(count).fill(this.name).map((c, i) => `${c}-${i}`);
+    }
+
     uniqueProperties(): Property[] {
         const props = {};
         this.sortedEntries.forEach(e => e.properties.forEach(p => props[p.name] = p));
@@ -1028,6 +1326,7 @@ export class DTSCtx {
     board: DTSFile;
     nodes: {[fullPath: string]: Node};
     dirty: vscode.Uri[];
+    includes = new Array<string>();
 
     constructor() {
         this.nodes = {};
@@ -1067,7 +1366,7 @@ export class DTSCtx {
         return this.dirty.length === 0 && !this.board?.dirty && !this.overlays.some(overlay => !overlay || overlay.dirty);
     }
 
-    node(name: string): Node | null {
+    node(name: string, parent?: Node): Node | null {
         if (name.startsWith('&{')) {
             const path = name.match(/^&{(.*)}/);
             if (!path) {
@@ -1082,6 +1381,10 @@ export class DTSCtx {
 
         if (!name.endsWith('/')) {
             name += '/';
+        }
+
+        if (parent) {
+            name = parent.path + name;
         }
 
         return this.nodes[name] ?? null;
@@ -1182,7 +1485,7 @@ export class DTSCtx {
 export class Parser {
     private includes: string[];
     private defines: {[name: string]: string};
-    private boardPaths: { [board: string]: string };
+    private boards: { [board: string]: zephyr.Board };
     private appCtx: DTSCtx[];
     private boardCtx: DTSCtx[]; // Raw board contexts, for when the user just opens a .dts or .dtsi file without any overlay
     private types: TypeLoader;
@@ -1194,7 +1497,7 @@ export class Parser {
         this.includes = includes;
         this.defines = defines;
         this.types = types;
-        this.boardPaths = {};
+        this.boards = {};
         this.appCtx = [];
         this.boardCtx = [];
         this.changeEmitter = new vscode.EventEmitter();
@@ -1223,15 +1526,16 @@ export class Parser {
         return [...this.appCtx, ...this.boardCtx];
     }
 
-    private async guessOverlayBoard(uri: vscode.Uri) {
+    private async guessOverlayBoard(uri: vscode.Uri): Promise<zephyr.Board> {
         const boardName = path.basename(uri.fsPath, '.overlay');
         // Some generic names are used for .overlay files: These can be ignored.
         const ignoredNames = ['app', 'dts', 'prj'];
-        let board: string;
+        let board: zephyr.Board;
         if (!ignoredNames.includes(boardName)) {
             board = await zephyr.findBoard(boardName);
             if (board) {
-                this.boardPaths[boardName] = board;
+                this.boards[boardName] = board;
+                console.log(uri.toString() + ': Using board ' + boardName);
                 return board;
             }
         }
@@ -1239,7 +1543,7 @@ export class Parser {
         board = await zephyr.defaultBoard();
         if (board) {
             const options = ['Configure default', 'Select a different board'];
-            vscode.window.showInformationMessage(`Using ${path.basename(board, '.dts')} as a default board.`, ...options).then(async e => {
+            vscode.window.showInformationMessage(`Using ${board.name} as a default board.`, ...options).then(async e => {
                 if (e === options[0]) {
                     zephyr.openConfig('devicetree.board');
                 } else if (e === options[1]) {
@@ -1271,17 +1575,22 @@ export class Parser {
         }
 
         if (path.extname(doc.fileName) === '.overlay') {
-            const boardGuess = await this.guessOverlayBoard(doc.uri);
-            if (!boardGuess) {
+            const board = await this.guessOverlayBoard(doc.uri);
+            if (!board) {
                 return;
             }
 
-            const boardDoc = await vscode.workspace.openTextDocument(boardGuess).then(doc => doc, _ => undefined);
+            const boardDoc = await vscode.workspace.openTextDocument(board.path).then(doc => doc, _ => undefined);
             if (!boardDoc) {
                 return;
             }
 
             const ctx = new DTSCtx();
+            // Board specific includes:
+            if (board.arch) {
+                // Should this be SOC_DIR based?
+                ctx.includes = await (await zephyr.modules()).map(module => module + '/dts/' + board.arch);
+            }
 
             ctx.board = await this.parse(ctx, boardDoc);
             ctx.overlays = [await this.parse(ctx, doc)];
@@ -1387,7 +1696,7 @@ export class Parser {
 
     private async parse(ctx: DTSCtx, doc: vscode.TextDocument): Promise<DTSFile> {
         const file = new DTSFile(doc.uri, ctx);
-        const preprocessed = await preprocess(doc, ctx.macros, this.includes, file.diags);
+        const preprocessed = await preprocess(doc, ctx.macros, [...this.includes, ...ctx.includes], file.diags);
         const state = new ParserState(doc.uri, file.diags, ...preprocessed);
 
         file.includes = state.includes;
@@ -1411,10 +1720,11 @@ export class Parser {
 
             if (requireSemicolon) {
                 requireSemicolon = false;
-                const loc = state.location();
                 const semicolon = state.match(/^;/);
                 if (!semicolon) {
+                    const loc = state.location();
                     state.pushDiag('Missing semicolon', vscode.DiagnosticSeverity.Error, loc);
+                    state.pushSemicolonAction(loc);
                 }
 
                 continue;
@@ -1426,14 +1736,18 @@ export class Parser {
                 continue;
             }
 
+            const nameStart = state.freeze();
             const name = state.match(/^([#?\w,.+-]+)/);
             if (name) {
-                const nameLoc = state.location();
+                const addr = state.match(/^@([\da-fA-F]+)/);
+                const nameLoc = state.location(nameStart);
 
-                const nodeMatch = state.match(/^(?:@([\da-fA-F]+))?\s*{/);
+                state.skipWhitespace();
+
+                const nodeMatch = state.match(/^{/);
                 if (nodeMatch) {
                     let node = new Node(name[1],
-                        nodeMatch[1],
+                        addr?.[1],
                         nodeStack.length > 0 ? nodeStack[nodeStack.length - 1].node : undefined);
 
                     if (ctx.nodes[node.path]) {
@@ -1457,8 +1771,14 @@ export class Parser {
 
                     nodeStack.push(entry);
 
-                    if (nodeMatch[1]?.startsWith('0') && Number(nodeMatch[1]) !== 0) {
+                    if (addr?.[1]?.startsWith('0') && Number(addr[1]) !== 0) {
                         state.pushDiag(`Address should not start with leading 0's`, vscode.DiagnosticSeverity.Warning);
+                        const action = state.pushAction(`Trim leading 0's`, vscode.CodeActionKind.QuickFix);
+                        action.edit = new vscode.WorkspaceEdit();
+                        action.edit.delete(nameLoc.uri,
+                            new vscode.Range(nameLoc.range.start.line, nameLoc.range.start.character + name[0].length + 1,
+                                             nameLoc.range.end.line,   nameLoc.range.end.character - addr[1].length + addr[1].match(/0+/)[0].length));
+
                     }
 
                     labels = [];
@@ -1466,6 +1786,11 @@ export class Parser {
                 }
 
                 requireSemicolon = true;
+
+                if (addr) {
+                    state.pushDiag(`Only nodes have addresses. Expecting opening node block`, vscode.DiagnosticSeverity.Warning, nameLoc);
+                    continue;
+                }
 
                 state.skipWhitespace();
                 const hasPropValue = state.match(/^=/);
@@ -1539,15 +1864,21 @@ export class Parser {
                 state.skipWhitespace();
                 requireSemicolon = true;
 
-                const node = state.match(/^&?[\w,.+/-]+/);
+                const node = state.match(/^&?[\w,.+/@-]+/);
                 if (!node) {
                     state.pushDiag(`Expected node`);
                     continue;
                 }
 
-                const n = ctx.node(node[0]);
+                let n: Node;
+                if (node[0].startsWith('&') || nodeStack.length === 0) {
+                    n = ctx.node(node[0]);
+                } else {
+                    /* Scope the node search to the current node's children */
+                    n = ctx.node(node[0], nodeStack[nodeStack.length - 1].node);
+                }
                 if (n) {
-                    n.deleted = true;
+                    n.deleted = state.location();
                 } else {
                     state.pushDiag(`Unknown node`, vscode.DiagnosticSeverity.Warning);
                 }
@@ -1603,6 +1934,7 @@ export class Parser {
                     entry.loc = new vscode.Location(entry.loc.uri, new vscode.Range(entry.loc.range.start, state.location().range.end));
                 } else {
                     state.pushDiag('Unexpected closing bracket');
+                    state.pushDeleteAction('Delete unnecessary closing bracket').isPreferred = true;
                 }
 
                 requireSemicolon = true;
@@ -1611,17 +1943,21 @@ export class Parser {
 
             state.skipToken();
             state.pushDiag('Unexpected token');
+            state.pushDeleteAction('Delete invalid token').isPreferred = true;
         }
 
         if (nodeStack.length > 0) {
+            const loc = state.location();
             const entry = nodeStack[nodeStack.length - 1];
             entry.loc = new vscode.Location(entry.loc.uri, new vscode.Range(entry.loc.range.start, state.location().range.end));
             console.error(`Unterminated node: ${nodeStack[nodeStack.length - 1].node.name}`);
             state.pushDiag('Unterminated node', vscode.DiagnosticSeverity.Error, entry.nameLoc);
+            state.pushInsertAction('Close brackets', '\n' + nodeStack.map((_, i) => '\t'.repeat(i) + '};\n').reverse().join(''), loc).isPreferred = true;
         }
 
         if (requireSemicolon) {
             state.pushDiag(`Expected semicolon`, vscode.DiagnosticSeverity.Error);
+            state.pushSemicolonAction();
         }
 
         const procTime = process.hrtime(timeStart);
@@ -1651,19 +1987,8 @@ export function getCells(propName: string, parent?: Node): string[] | undefined 
     }
 
     if (propName === 'reg') {
-        let addrCells = 2;
-        let sizeCells = 1;
-        if (parent) {
-            const addrCellsProp = parent.property('#address-cells');
-            if (addrCellsProp?.number !== undefined) {
-                addrCells = addrCellsProp.number;
-            }
-
-            const sizeCellsProp = parent.property('#size-cells');
-            if (sizeCellsProp?.number !== undefined) {
-                sizeCells = sizeCellsProp.number;
-            }
-        }
+        const addrCells = parent?.addrCells() ?? 2;
+        const sizeCells = parent?.sizeCells() ?? 1;
         return [...Array(addrCells).fill('addr'), ...Array(sizeCells).fill('size')];
     }
 }
@@ -1674,10 +1999,18 @@ export function cellName(propname: string) {
          * where XXX is the singular version of the name of this property UNLESS the property is called XXX-gpios, in which
          * case the cell count is determined by the parent's #gpio-cells property
          */
-        return propname.endsWith('-gpios') ? 'gpio-cells' : propname.slice(0, propname.length) + '-cells';
+        return propname.endsWith('-gpios') ? 'gpio-cells' : propname.slice(0, propname.length - 1) + '-cells';
+    }
+
+    if (propname.endsWith('-map')) {
+        return propname.slice(0, propname.length - '-map'.length) + '-cells';
+    }
+
+    if (propname === 'interrupts-extended') {
+        return 'interrupt-cells';
     }
 }
 
 export function getPHandleCells(propname: string, parent: Node): Property {
-    return parent?.property(cellName(propname));
+    return parent?.property('#' + cellName(propname));
 }

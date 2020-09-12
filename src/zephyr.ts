@@ -5,6 +5,7 @@ import { ExecOptions, exec } from 'child_process';
 import { existsSync } from 'fs';
 import * as glob from 'glob';
 
+export type Board = { name: string, path: string, arch?: string }
 const conf = vscode.workspace.getConfiguration();
 export let zephyrRoot: string;
 let westExe: string;
@@ -27,6 +28,10 @@ function west(...args: string[]): Promise<string> {
 			}
 		});
 	});
+}
+
+export function modules(): Promise<string[]> {
+	return west('list', '-f', '{posixpath}').then(out => out.split(/\r?\n/), _ => []);
 }
 
 export function openConfig(entry: string) {
@@ -76,7 +81,7 @@ async function* boardRoots(): AsyncIterable<string> {
 		yield zephyrRoot + '/boards';
 	}
 
-	for (const module of await west('list', '-f', '{posixpath}').then(output => output.split(/\r?\n/), rejected => [])) {
+	for (const module of await modules()) {
 		const dir = module.trim();
 		if (dir && existsSync(dir + '/boards')) {
 			yield dir + '/boards';
@@ -84,12 +89,12 @@ async function* boardRoots(): AsyncIterable<string> {
 	}
 }
 
-async function findBoards(filter='*', maxCount=0): Promise<string[]> {
-	const boards = new Array<string>();
+async function findBoards(filter='*', maxCount=0): Promise<Board[]> {
+	const boards = new Array<Board>();
 	for await (const root of boardRoots()) {
 		const g = new glob.Glob(`**/${filter}.dts`, { cwd: root });
 		g.on('match', (m: string) => {
-			boards.push(`${root}/${m}`);
+			boards.push({name: path.basename(m, '.dts'), path: `${root}/${m}`, arch: m.split(/[/\\]/)?.[0]});
 			if (maxCount && boards.length === maxCount) {
 				g.abort();
 			}
@@ -108,7 +113,7 @@ async function findBoards(filter='*', maxCount=0): Promise<string[]> {
 	return boards;
 }
 
-export async function findBoard(board: string): Promise<string> {
+export async function findBoard(board: string): Promise<Board> {
 	return findBoards(board, 1).then(boards => boards[0]);
 }
 
@@ -126,7 +131,7 @@ export async function isBoardFile(uri: vscode.Uri) {
 	return false;
 }
 
-export async function defaultBoard(): Promise<string> {
+export async function defaultBoard(): Promise<Board> {
 	const dtsBoard = conf.get('devicetree.board') as string;
 	if (dtsBoard) {
 		const path = await findBoard(dtsBoard);
@@ -139,10 +144,10 @@ export async function defaultBoard(): Promise<string> {
 
 	const kconfigBoard = conf.get('kconfig.zephyr.board') as { board: string, arch: string, dir: string };
 	if (kconfigBoard?.dir && kconfigBoard.board) {
-		const kConfigBoardPath = path.join(kconfigBoard.dir, kconfigBoard.board + '.dts');
-		if (existsSync(kConfigBoardPath)) {
+		const board = <Board>{ name: kconfigBoard.board, path: path.join(kconfigBoard.dir, kconfigBoard.board + '.dts'), arch: kconfigBoard.arch };
+		if (existsSync(board.path)) {
 			console.log('Using Kconfig board');
-			return kConfigBoardPath;
+			return board;
 		}
 	}
 
@@ -150,8 +155,8 @@ export async function defaultBoard(): Promise<string> {
 	return (await findBoard('nrf52dk_nrf52832')) ?? (await findBoard('nrf52_pca10040'));
 }
 
-export async function selectBoard() {
-	return vscode.window.showQuickPick((await findBoards()).map(board => <vscode.QuickPickItem>{ label: path.basename(board, '.dts'), detail: board }), { placeHolder: 'Default board' }).then(board => board.detail!);
+export async function selectBoard(): Promise<Board> {
+	return vscode.window.showQuickPick((await findBoards()).map(board => <vscode.QuickPickItem>{ label: board.name, detail: board.arch, board }), { placeHolder: 'Default board' }).then(board => board['board']);
 }
 
 export async function activate(ctx: vscode.ExtensionContext) {

@@ -167,9 +167,11 @@ class DTSEngine implements
     vscode.CompletionItemProvider,
     vscode.SignatureHelpProvider,
     vscode.DocumentRangeFormattingEditProvider,
-    vscode.DocumentLinkProvider {
+    vscode.DocumentLinkProvider,
+    vscode.CodeActionProvider {
     parser: dts.Parser;
     diags: vscode.DiagnosticCollection;
+    diagSet?: DiagnosticsSet;
     types: types.TypeLoader;
     prevDiagUris: vscode.Uri[] = [];
 
@@ -196,6 +198,14 @@ class DTSEngine implements
         });
     }
 
+    provideCodeActions(document: vscode.TextDocument, range: vscode.Range | vscode.Selection, context: vscode.CodeActionContext, token: vscode.CancellationToken): vscode.ProviderResult<vscode.CodeAction[]> {
+        if (!this.diagSet) {
+            return [];
+        }
+
+        return this.diagSet.getActions(document.uri, range).filter(action => !context.only || context.only === action.kind);
+    }
+
     activate(ctx: vscode.ExtensionContext) {
         const selector = <vscode.DocumentFilter>{ language: 'dts', scheme: 'file' };
         let disposable = vscode.languages.registerDocumentSymbolProvider(selector, this);
@@ -216,6 +226,9 @@ class DTSEngine implements
         ctx.subscriptions.push(disposable);
         disposable = vscode.workspace.registerTextDocumentContentProvider('devicetree', new DTSDocumentProvider(this.parser));
         ctx.subscriptions.push(disposable);
+        disposable = vscode.languages.registerCodeActionsProvider(selector, this);
+        ctx.subscriptions.push(disposable);
+        // disposable = vscode.languages.registerDocumentFormattingEditProvider(selector, this); // TODO
 
         vscode.commands.registerCommand('devicetree.showOutput', () => {
             if (vscode.window.activeTextEditor?.document.languageId === 'dts') {
@@ -252,6 +265,7 @@ class DTSEngine implements
         this.prevDiagUris.filter(uri => !diags.all.find(set => uri.toString() === set.uri.toString())).forEach(uri => this.diags.set(uri, []));
         diags.all.forEach(d => this.diags.set(d.uri, d.diags));
         this.prevDiagUris = diags.all.map(set => set.uri);
+        this.diagSet = diags;
     }
 
     addMissing(entry: dts.NodeEntry, propType: types.PropertyType) {
@@ -477,8 +491,8 @@ class DTSEngine implements
             const parent = item['dts-parent'] as dts.Node;
             const snippet = new vscode.SnippetString();
             snippet.appendPlaceholder(item.label);
-            const addrCells = parent?.property('#address-cells')?.number;
-            const sizeCells = parent?.property('#size-cells')?.number;
+            const addrCells = parent?.addrCells() ?? 2;
+            const sizeCells = parent?.sizeCells() ?? 1;
             const insertAddr = (addrCells === 1);
             if (insertAddr) {
                 snippet.appendText('@');
@@ -781,6 +795,9 @@ class DTSEngine implements
                     completion.kind = vscode.CompletionItemKind.TypeParameter;
                 }
 
+                // Put the properties at the top:
+                completion.sortText = '!!!' + completion.label;
+
                 completion.insertText = new vscode.SnippetString();
                 appendPropSnippet(p, completion.insertText, node);
                 return completion;
@@ -882,11 +899,7 @@ class DTSEngine implements
         }
 
         const propType = node.type.properties.find(p => p.name === prop.name);
-        if (!propType) {
-            return;
-        }
-
-        if (propType.type === 'int' && propType.description) {
+        if (propType?.type === 'int' && propType.description) {
             const info = new vscode.SignatureInformation(`${node.path}${prop.name}`, propType.description);
             info.parameters = [new vscode.ParameterInformation(`number`)];
             const help = new vscode.SignatureHelp();
@@ -896,7 +909,8 @@ class DTSEngine implements
             return help;
         }
 
-        if (propType.type !== 'phandle-array' && propType.type !== 'array') {
+        const actualType = prop.type();
+        if (!['phandle-array', 'array', 'phandle', 'phandles'].includes(actualType)) {
             return;
         }
 
@@ -905,42 +919,31 @@ class DTSEngine implements
             return;
         }
 
-        const entry = value.find(v => v.loc.range.contains(position));
-        if (!(entry instanceof dts.ArrayValue) || !entry?.val?.length) {
+        const entryIdx = value.findIndex(v => v.loc.range.contains(position));
+        if (entryIdx === -1 || !(value[entryIdx] instanceof dts.ArrayValue) || !value[entryIdx]?.val?.length) {
             return;
         }
 
-        const paramIndex = (entry.val.findIndex(v => v.loc.range.contains(position)) ?? (entry.val.length - 1));
 
-        let params: string[];
-
-        const cells = dts.getCells(prop.name, node.parent);
-        if (cells) {
-            params = cells;
-        } else if (propType.type === 'phandle-array') {
-            let ref : dts.Node;
-            if (entry.length > 0 && (entry.val[0] instanceof dts.PHandle) && (ref = ctx.node(entry.val[0].val))) {
-                const cellNames = ref.type?.[dts.cellName(prop.name)];
-                if (cellNames) {
-                    params = [entry.val[0].val, ...cellNames];
-                } else {
-                    const cellsProp = dts.getPHandleCells(prop.name, ref);
-                    const len = cellsProp?.number ?? entry.length - 1;
-                    params = [entry.val[0].val, ...new Array(len).map((_, i) => `cell-${i + 1}`)];
-                }
-            }
-        } else {
-            params = new Array(entry.length).map((_, i) => `param-${i+1}`);
-        }
-
-        if (!params) {
+        const names = prop.cellNames(ctx);
+        if ((names?.length ?? 0) < entryIdx) {
             return;
         }
 
-        const signature = prop.name + ` = < ${params.join(' ')} >;`;
+        const cells = names[entryIdx];
+        const paramIndex = (value[entryIdx].val.findIndex(v => v.loc.range.contains(position)) ?? (value[entryIdx].val.length - 1)) % cells.length;
 
-        const info = new vscode.SignatureInformation(signature, propType.description);
-        info.parameters = params.map((name, i) => new vscode.ParameterInformation(name));
+        let signature = prop.name + ` = < `;
+        const params = cells.map(name => {
+            const start = signature.length;
+            signature += name + ' ';
+            return new vscode.ParameterInformation([start, start + name.length]);
+        });
+
+        signature += '>;';
+
+        const info = new vscode.SignatureInformation(signature, propType?.description);
+        info.parameters = params;
 
         return <vscode.SignatureHelp>{activeParameter: paramIndex, activeSignature: 0, signatures: [info]};
     }

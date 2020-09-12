@@ -79,6 +79,36 @@ const standardProperties: PropertyType[] = [
         description: 'Specifies the frequency of a clock in Hz.'
     },
     {
+        name: 'clocks',
+        type: 'phandle-array',
+        required: false,
+        description: 'Clock input to the device.'
+    },
+    {
+        name: 'ranges',
+        type: ['boolean', 'array'],
+        description: 'The ranges property provides a means of defining a mapping or translation between the address space of the\n' +
+        'bus (the child address space) and the address space of the bus node’s parent (the parent address space).\n' +
+        'The format of the value of the ranges property is an arbitrary number of triplets of (child-bus-address,\n' +
+        'parentbus-address, length)\n' +
+        '\n' +
+        '- The child-bus-address is a physical address within the child bus’ address space. The number of cells to\n' +
+        'represent the address is bus dependent and can be determined from the #address-cells of this node (the\n' +
+        'node in which the ranges property appears).\n' +
+        '- The parent-bus-address is a physical address within the parent bus’ address space. The number of cells\n' +
+        'to represent the parent address is bus dependent and can be determined from the #address-cells property\n' +
+        'of the node that defines the parent’s address space.\n' +
+        '- The length specifies the size of the range in the child’s address space. The number of cells to represent\n' +
+        'the size can be determined from the #size-cells of this node (the node in which the ranges property\n' +
+        'appears).\n' +
+        '\n' +
+        'If the property is defined with an <empty> value, it specifies that the parent and child address space is\n' +
+        'identical, and no address translation is required.\n' +
+        'If the property is not present in a bus node, it is assumed that no mapping exists between children of the node\n' +
+        'and the parent address space.\n',
+        required: false
+    },
+    {
         name: 'reg-shift',
         type: 'int',
         required: false,
@@ -88,7 +118,7 @@ const standardProperties: PropertyType[] = [
         'is calculated by using following formula: “registers address” << reg-shift. If unspecified, the default\n' +
         'value is 0.\n' +
         'For example, in a system where 16540 UART registers are located at addresses 0x0, 0x4, 0x8, 0xC,\n' +
-        '0x10, 0x14, 0x18, and 0x1C, a reg-shift = \\<2\\> property would be used to specify register\n' +
+        '0x10, 0x14, 0x18, and 0x1C, a reg-shift = 2 property would be used to specify register\n' +
         'locations.`\n',
     },
     {
@@ -106,8 +136,8 @@ const standardProperties: PropertyType[] = [
         'a different meaning on some bus types. Addresses in the address space defined by the root node are CPU real\n' +
         'addresses.\n' +
         '\n' +
-        'The value is a \\<prop-encoded-array\\>, composed of an arbitrary number of pairs of address and length,\n' +
-        '\\<address length\\>. The number of \\<u32\\> cells required to specify the address and length are bus-specific\n' +
+        'The value is a prop-encoded-array, composed of an arbitrary number of pairs of address and length,\n' +
+        'address length. The number of u32 cells required to specify the address and length are bus-specific\n' +
         'and are specified by the #address-cells and #size-cells properties in the parent of the device node. If the parent\n' +
         'node specifies a value of 0 for #size-cells, the length field in the value of reg shall be omitted.\n',
     }
@@ -220,29 +250,9 @@ export class TypeLoader {
                     required: true,
                 },
                 {
-                    name: 'ranges',
-                    type: ['boolean', 'array'],
-                    description: 'The ranges property provides a means of defining a mapping or translation between the address space of the\n' +
-                    'bus (the child address space) and the address space of the bus node’s parent (the parent address space).\n' +
-                    'The format of the value of the ranges property is an arbitrary number of triplets of (child-bus-address,\n' +
-                    'parentbus-address, length)\n' +
-                    '\n' +
-                    '- The child-bus-address is a physical address within the child bus’ address space. The number of cells to\n' +
-                    'represent the address is bus dependent and can be determined from the #address-cells of this node (the\n' +
-                    'node in which the ranges property appears).\n' +
-                    '- The parent-bus-address is a physical address within the parent bus’ address space. The number of cells\n' +
-                    'to represent the parent address is bus dependent and can be determined from the #address-cells property\n' +
-                    'of the node that defines the parent’s address space.\n' +
-                    '- The length specifies the size of the range in the child’s address space. The number of cells to represent\n' +
-                    'the size can be determined from the #size-cells of this node (the node in which the ranges property\n' +
-                    'appears).\n' +
-                    '\n' +
-                    'If the property is defined with an <empty> value, it specifies that the parent and child address space is\n' +
-                    'identical, and no address translation is required.\n' +
-                    'If the property is not present in a bus node, it is assumed that no mapping exists between children of the node\n' +
-                    'and the parent address space.\n',
-                    required: true
-                }
+                    ...standardProperties.find(p => p.name === 'ranges'),
+                    required: true,
+                },
             ]
         }],
         '/cpus/': [{

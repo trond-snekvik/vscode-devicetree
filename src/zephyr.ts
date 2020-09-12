@@ -76,7 +76,7 @@ async function* boardRoots(): AsyncIterable<string> {
 		yield zephyrRoot + '/boards';
 	}
 
-	for (const module of (await west('list', '-f', '{posixpath}')).split(/\r?\n/)) {
+	for (const module of await west('list', '-f', '{posixpath}').then(output => output.split(/\r?\n/), rejected => [])) {
 		const dir = module.trim();
 		if (dir && existsSync(dir + '/boards')) {
 			yield dir + '/boards';

@@ -256,6 +256,7 @@
                 {"include": "#uint8-array"},
                 {"include": "#block-comment"},
                 {"include": "#comment"},
+                {"include": "#ref"},
                 {"match": ","}
             ]
         },

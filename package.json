@@ -21,6 +21,13 @@
     },
     "main": "./out/src/extension",
     "contributes": {
+        "commands": [
+            {
+                "command": "devicetree.showOutput",
+                "title": "Devicetree: Show compiled output",
+                "enablement": "editorLangId == dts"
+            }
+        ],
         "languages": [
             {
                 "id": "dts",

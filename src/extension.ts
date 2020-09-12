@@ -130,6 +130,35 @@ function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString,
     snippet.appendText(';');
 }
 
+class DTSDocumentProvider implements vscode.TextDocumentContentProvider {
+    private parser: dts.Parser;
+    private changeEmitter: vscode.EventEmitter<vscode.Uri>;
+    private currUri?: vscode.Uri;
+    onDidChange: vscode.Event<vscode.Uri>;
+
+    constructor(parser: dts.Parser) {
+        this.changeEmitter = new vscode.EventEmitter();
+        this.onDidChange = this.changeEmitter.event;
+        this.parser = parser;
+        this.parser.onChange(ctx => {
+            if (this.currUri && ctx.has(vscode.Uri.file(this.currUri.path))) {
+                this.changeEmitter.fire(this.currUri);
+            }
+        });
+    }
+
+    provideTextDocumentContent(uri: vscode.Uri, token: vscode.CancellationToken): vscode.ProviderResult<string> {
+        this.currUri = uri;
+        const ctx = this.parser.ctx(vscode.Uri.file(uri.path));
+        if (!ctx) {
+            return `/* Unable to resolve path ${uri.toString()} */`;
+        }
+
+        return ctx.toString();
+    }
+
+}
+
 class DTSEngine implements
     vscode.DocumentSymbolProvider,
     vscode.WorkspaceSymbolProvider,
@@ -150,7 +179,7 @@ class DTSEngine implements
 
         const defines = (getConfig('deviceTree.defines') ?? {}) as {[name: string]: string};
         const includes = getConfig('deviceTree.includes') as string[] ??
-            vscode.workspace.workspaceFolders.map(w => ['include', 'dts/common', 'dts/arm', 'dts'].map(i => w.uri.fsPath + '/' + i)).reduce((arr, elem) => [...arr, ...elem], []);
+            vscode.workspace.workspaceFolders?.map(w => ['include', 'dts/common', 'dts/arm', 'dts'].map(i => w.uri.fsPath + '/' + i)).reduce((arr, elem) => [...arr, ...elem], []) ?? [];
 
         this.parser = new dts.Parser(defines, includes, this.types);
         this.parser.onChange(ctx => {
@@ -185,6 +214,14 @@ class DTSEngine implements
         ctx.subscriptions.push(disposable);
         disposable = vscode.languages.registerDocumentLinkProvider(selector, this);
         ctx.subscriptions.push(disposable);
+        disposable = vscode.workspace.registerTextDocumentContentProvider('devicetree', new DTSDocumentProvider(this.parser));
+        ctx.subscriptions.push(disposable);
+
+        vscode.commands.registerCommand('devicetree.showOutput', () => {
+            if (vscode.window.activeTextEditor?.document.languageId === 'dts') {
+                vscode.window.showTextDocument(vscode.Uri.parse('devicetree://' + vscode.window.activeTextEditor?.document.uri.path), { viewColumn: vscode.ViewColumn.Beside });
+            }
+        });
 
         vscode.languages.setLanguageConfiguration('dts',
             <vscode.LanguageConfiguration>{

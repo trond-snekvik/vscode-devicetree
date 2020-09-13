@@ -970,7 +970,7 @@ class DTSEngine implements
         text = text.replace(/([\w,-]+)@0*([\da-fA-F]+)\s*{[\t ]*/g, '$1@$2 {');
         text = text.replace(/(\w+)\s*=\s*(".*?"|<.*?>|\[.*?\])\s*;/g, '$1 = $2;');
         text = text.replace(/<\s*(.*?)\s*>/g, '< $1 >');
-        text = text.replace(/([;{])[ \t]+\r?\n?/g, '$1' + eol);
+        text = text.replace(/([;{])[ \t]+\r?\n/g, '$1' + eol);
         text = text.replace(/\[\s*((?:[\da-fA-F]{2}\s*)+)\s*\]/g, (_, contents: string) => `[ ${contents.replace(/([\da-fA-F]{2})\s*/g, '$1 ')} ]`);
         text = text.replace(/[ \t]+\r?\n/g, eol);
 
@@ -987,6 +987,10 @@ class DTSEngine implements
         // indentation
         let commaIndent = '';
         text = text.split(/\r?\n/).map(line => {
+            if (line.length === 0) {
+                return line;
+            }
+
             const delta = (line.match(/{/g) || []).length - (line.match(/}/g) || []).length;
             if (delta < 0) {
                 indent = indent.slice(indentStep.repeat(-delta).length);
@@ -1012,11 +1016,26 @@ class DTSEngine implements
 
 
         // move comma separated property values on new lines:
-        text = text.replace(/^([ \t]*)([#\w-]+)\s*=\s*((?:(?:".*?"|<.*?>|\[.*?\])[ \t]*,?[ \t]*)+);/gm, (line, indentation, p, val) => {
+        text = text.replace(/([ \t]*)([#\w-]+)\s*=((?:\s*(?:".*?"|<.*?>|\[.*?\])[ \t]*,?\s*(\/\*.*?\*\/)?\s*)+);/gm, (line: string, indentation: string, p: string, val: string) => {
             if (line.length < 80) {
                 return line;
             }
-            const parts = val.match(/(".*?"|<.*?>|\[.*?\])[ \t]*,?[ \t]*/g);
+
+            const regex =  new RegExp(/((?:".*?"|<.*?>|\[.*?\])[ \t]*,?)[ \t]*(\/\*.*?\*\/)?/gm);
+            const parts = [];
+            let entry: RegExpMatchArray;
+            while ((entry = regex.exec(val))) {
+                if (entry[2]) {
+                    parts.push(entry[1] + ' ' + entry[2]);
+                } else {
+                    parts.push(entry[1]);
+                }
+            }
+
+            if (!parts.length) {
+                return line;
+            }
+
             const start = `${indentation}${p} = `;
             return start + parts.map(p => p.trim()).join(`${eol}${indentation}${' '.repeat(p.length + 3)}`) + ';';
         });

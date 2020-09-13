@@ -700,6 +700,10 @@ export class Property {
         return this.loc; // better than nothing
     }
 
+    get fullLoc() {
+        return new vscode.Location(this.loc.uri, this.loc.range.union(this.value[this.value.length - 1].loc.range)); // better than nothing
+    }
+
     get boolean() {
         if (this.value.length === 1 && (this.value[0] instanceof BoolValue)) {
             return true;
@@ -1191,6 +1195,27 @@ export class NodeEntry {
 
         return this.parent.depth + 1;
     }
+
+    toString(indent?: string) {
+        let result = indent;
+        if (this.ref) {
+            result += this.ref;
+        } else {
+            result += this.node.fullName;
+        }
+        result += ' {\n';
+        indent += '\t';
+
+        result += this.properties.map(p => indent + p.toString(indent.length) + ';\n').join('');
+
+        if (this.properties.length && this.children.length) {
+            result += '\n';
+        }
+
+        result += this.children.map(c => c.toString(indent) + ';\n').join('\n');
+
+        return result + indent.slice(4) + '}';
+    }
 }
 
 export class Node {
@@ -1420,6 +1445,15 @@ export class DTSCtx {
         let prop: Property;
         this.files.filter(f => f.has(uri)).find(file => prop = file.getPropertyAt(pos, uri));
         return prop;
+    }
+
+    getProperties(range: vscode.Range, uri: vscode.Uri) {
+        const props = new Array<Property>();
+        this.nodeArray().forEach(n => {
+            props.push(...n.properties().filter(p => p.fullLoc.uri.toString() === uri.toString() && p.fullLoc.range.intersection(range)));
+        });
+
+        return props;
     }
 
     getPHandleNode(handle: number | string): Node {

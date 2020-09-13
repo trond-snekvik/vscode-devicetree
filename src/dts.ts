@@ -17,6 +17,10 @@ abstract class PropertyValue {
         this.loc = loc;
     }
 
+    contains(pos: vscode.Position, uri: vscode.Uri) {
+        return this.loc.uri.toString() === uri.toString() && this.loc.range.contains(pos);
+    }
+
     toString(): string {
         return this.val.toString();
     }
@@ -160,6 +164,10 @@ export class ArrayValue extends PropertyValue {
         return new ArrayValue(values, state.location(start));
     }
 
+    cellAt(pos: vscode.Position, uri: vscode.Uri) {
+        return this.val.find(v => v.contains(pos, uri));
+    }
+
     get length() {
         return this.val.length;
     }
@@ -214,6 +222,15 @@ export class PHandle extends PropertyValue {
     private constructor(value: string, isRef: boolean, loc: vscode.Location, kind: 'ref' | 'pathRef' | 'string') {
         super(value, loc);
         this.kind = kind;
+    }
+
+    is(node: Node) {
+        if (this.kind === 'ref') {
+            const labelName = this.val.slice(1);
+            return node.labels().includes(labelName);
+        }
+
+        return this.val === node.path;
     }
 
     static match(state: ParserState): PHandle {
@@ -957,7 +974,7 @@ export class Property {
             let refCells = [];
             return contents.map(c => {
                 if (c instanceof PHandle) {
-                    refCells = ctx.node(c.val)?.refCellNames(this.name)?.reverse() ?? [];
+                    refCells = Array.from(ctx.node(c.val)?.refCellNames(this.name) ?? [])?.reverse() ?? [];
                     return c.toString();
                 }
 
@@ -968,6 +985,10 @@ export class Property {
                 return 'cell';
             });
         });
+    }
+
+    valueAt(pos: vscode.Position, uri: vscode.Uri) {
+        return this.value.find(v => v.contains(pos, uri));
     }
 
     type(): string {
@@ -1447,6 +1468,16 @@ export class DTSCtx {
         return prop;
     }
 
+    getReferences(node: Node): PHandle[] {
+        const refs = new Array<PHandle>();
+
+        this.properties.forEach(p => {
+            refs.push(...(<PHandle[]>p.pHandleArray?.flatMap(v => v.val.filter(v => v instanceof PHandle && v.is(node))) ?? []));
+        });
+
+        return refs;
+    }
+
     getProperties(range: vscode.Range, uri: vscode.Uri) {
         const props = new Array<Property>();
         this.nodeArray().forEach(n => {
@@ -1503,6 +1534,10 @@ export class DTSCtx {
         return entries;
     }
 
+    get properties() {
+        return this.entries.flatMap(e => e.properties);
+    }
+
     get root() {
         return this.nodes['/'];
     }
@@ -1536,6 +1571,14 @@ export class Parser {
         this.boardCtx = [];
         this.changeEmitter = new vscode.EventEmitter();
         this.onChange = this.changeEmitter.event;
+
+        zephyr.modules().then(modules => {
+            modules.forEach(m => {
+                this.includes.push(m + '/include');
+                this.includes.push(m + '/dts');
+                this.includes.push(m + '/dts/common');
+            });
+        });
     }
 
     file(uri: vscode.Uri) {

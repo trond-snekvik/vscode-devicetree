@@ -168,7 +168,7 @@ class DTSEngine implements
     vscode.SignatureHelpProvider,
     vscode.DocumentRangeFormattingEditProvider,
     vscode.DocumentLinkProvider,
-    vscode.CodeActionProvider {
+    vscode.ReferenceProvider {
     parser: dts.Parser;
     diags: vscode.DiagnosticCollection;
     diagSet?: DiagnosticsSet;
@@ -180,10 +180,8 @@ class DTSEngine implements
         this.types = new types.TypeLoader();
 
         const defines = (getConfig('deviceTree.defines') ?? {}) as {[name: string]: string};
-        const includes = getConfig('deviceTree.includes') as string[] ??
-            vscode.workspace.workspaceFolders?.map(w => ['include', 'dts/common', 'dts/arm', 'dts'].map(i => w.uri.fsPath + '/' + i)).reduce((arr, elem) => [...arr, ...elem], []) ?? [];
 
-        this.parser = new dts.Parser(defines, includes, this.types);
+        this.parser = new dts.Parser(defines, [], this.types);
         this.parser.onChange(ctx => {
             const lintCtx: LintCtx =  {
                 diags: new DiagnosticsSet(),
@@ -196,6 +194,31 @@ class DTSEngine implements
             diags.merge(lintCtx.diags);
             this.setDiags(diags);
         });
+    }
+
+    /** Returns all pHandle references to the node under cursor.  */
+    provideReferences(document: vscode.TextDocument, position: vscode.Position, context: vscode.ReferenceContext, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Location[]> {
+        const ctx = this.parser.ctx(document.uri);
+        if (!ctx) {
+            return;
+        }
+
+        // Check for value references:
+        const value = ctx.getPropertyAt(position, document.uri)?.valueAt(position, document.uri);
+        if (value instanceof dts.ArrayValue) {
+            const cell = value.cellAt(position, document.uri);
+            if (cell instanceof dts.PHandle) {
+                const node = ctx.node(cell.val);
+                if (node) {
+                    return ctx.getReferences(node).map(r => r.loc);
+                }
+            }
+        }
+
+        const entry = ctx.getEntryAt(position, document.uri);
+        if (entry && entry.nameLoc.uri.toString() === document.uri.toString() && entry.nameLoc.range.contains(position)) {
+            return ctx.getReferences(entry.node).map(r => r.loc);
+        }
     }
 
     provideCodeActions(document: vscode.TextDocument, range: vscode.Range | vscode.Selection, context: vscode.CodeActionContext, token: vscode.CancellationToken): vscode.ProviderResult<vscode.CodeAction[]> {
@@ -228,7 +251,8 @@ class DTSEngine implements
         ctx.subscriptions.push(disposable);
         disposable = vscode.languages.registerCodeActionsProvider(selector, this);
         ctx.subscriptions.push(disposable);
-        // disposable = vscode.languages.registerDocumentFormattingEditProvider(selector, this); // TODO
+        disposable = vscode.languages.registerReferenceProvider(selector, this);
+        ctx.subscriptions.push(disposable);
 
         vscode.commands.registerCommand('devicetree.showOutput', () => {
             if (vscode.window.activeTextEditor?.document.languageId === 'dts') {

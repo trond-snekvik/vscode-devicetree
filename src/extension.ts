@@ -410,12 +410,15 @@ class DTSEngine implements
         if (bundle) {
             const node = bundle[1];
 
-            const name = new vscode.MarkdownString('`' + node.path + '`');
+            const entries = [new vscode.MarkdownString('`' + node.path + '`')];
+
             if (node.type.valid) {
-                name.appendText(' (' + node.type.description + ')');
+                entries.push(new vscode.MarkdownString().appendText(node.type.description));
             }
 
-            return new vscode.Hover([name, { language: 'dts', value: node.toString() }], bundle[0]);
+            entries.push(new vscode.MarkdownString().appendCodeblock(node.toString(), 'dts'));
+
+            return new vscode.Hover(entries, bundle[0]);
         }
 
         // hover property name

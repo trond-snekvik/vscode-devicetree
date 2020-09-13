@@ -36,7 +36,10 @@ function lintNode(node: Node, ctx: LintCtx) {
                     if (p.val.length % (addrCells + sizeCells)) {
                         ctx.diags.pushLoc(p.loc, `reg property must be on format ${format}.`, vscode.DiagnosticSeverity.Error);
                     } else if (addrCells === 1 && Number.isInteger(node.address) && node.address !== p.val[0].val) {
-                        ctx.diags.pushLoc(p.loc, `Node address does not match address cell (expected 0x${node.address.toString(16)})`);
+                        ctx.diags.pushLoc(p.val[0].loc, `Node address does not match address cell (expected 0x${node.address.toString(16)})`);
+                        const action = ctx.diags.pushAction(new vscode.CodeAction('Change to match node address', vscode.CodeActionKind.QuickFix));
+                        action.edit = new vscode.WorkspaceEdit();
+                        action.edit.replace(p.val[0].loc.uri, p.val[0].loc.range, `0x${node.address.toString(16)}`);
                     }
                 });
             }
@@ -383,9 +386,11 @@ function lintNode(node: Node, ctx: LintCtx) {
                 const overlap = ranges.find(r => r.start + r.size > range.start && range.start + range.size > r.start);
                 if (overlap) {
                     c.entries.forEach(e => {
-                        const diag = ctx.diags.pushLoc(e.nameLoc, `Range overlaps with ${overlap.n.fullName}`);
+                        const diag = ctx.diags.pushLoc(reg.valueLoc, `Address range collides with ${overlap.n.fullName}`);
                         if (overlap.start < range.start) {
                             diag.message += ` (ends at 0x${(overlap.start + overlap.size).toString(16)})`;
+                        } else if (overlap.start === range.start) {
+                            diag.message += ` (${c.fullName} also starts at 0x${(range.start + range.size).toString(16)})`;
                         } else {
                             diag.message += ` (${c.fullName} ends at 0x${(range.start + range.size).toString(16)})`;
                         }

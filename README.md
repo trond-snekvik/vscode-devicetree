@@ -26,6 +26,7 @@ This extension is an independent community contribution, and is not part of the 
 - Copy C identifier to clipboard
 - Show GPIO pin assignments
 - Manage Devicetree contexts
+- Format selection
 - Linting language rules
   - Redundant properties
   - Required properties

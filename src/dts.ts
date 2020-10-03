@@ -167,7 +167,7 @@ export class ArrayValue extends PropertyValue {
                     // Reset the state to avoid consuming these tokens:
                     state.reset(startOfError);
                     state.pushDiag(`Unterminated expression`, vscode.DiagnosticSeverity.Error, state.location(start));
-                    state.pushInsertAction('Add closing bracket', ' >', state.location()).isPreferred = true;
+                    // state.pushInsertAction('Add closing bracket', ' >', state.location()).isPreferred = true;
                     break;
                 }
 
@@ -182,7 +182,7 @@ export class ArrayValue extends PropertyValue {
                         }
 
                         state.pushDiag(`Unterminated expression`, vscode.DiagnosticSeverity.Error, state.location(start, endOfError));
-                        state.pushInsertAction('Add closing bracket', ' >', state.location(startOfError, endOfError)).isPreferred = true;
+                        // state.pushInsertAction('Add closing bracket', ' >', state.location(startOfError, endOfError)).isPreferred = true;
                     }
 
                     break;

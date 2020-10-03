@@ -8,9 +8,9 @@ import * as path from 'path';
 import { DiagnosticsSet } from './diags';
 import { existsSync, readFile, writeFile, writeFileSync } from 'fs';
 
-function getConfig(variable: string) {
-    const config = vscode.workspace.getConfiguration('devicetree');
+const config = vscode.workspace.getConfiguration('devicetree');
 
+function getConfig(variable: string) {
     const result = config.inspect(variable);
     if (result) {
         return result.workspaceFolderValue || result.workspaceValue || result.globalValue || result.defaultValue;
@@ -93,30 +93,11 @@ function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString,
             snippet.appendText('"');
             break;
         case 'phandle':
-            snippet.appendText(p.name + ' = < ');
-            snippet.appendPlaceholder('&label');
-            snippet.appendText(' >');
-            break;
-        case 'phandle-array': {
+        case 'phandle-array':
             snippet.appendText(p.name + ' = < &');
             snippet.appendPlaceholder('label');
-            let cellNames: string[] = [];
-            const cellsName = `${p.name.slice(0, p.name.length - 1)}-cells`;
-            if (p.name.endsWith('s') && node?.parent?.type && cellsName in node.parent.type) {
-                cellNames = node.parent.type[cellsName];
-            }
-
-            Array(dts.getPHandleCells(p.name, node?.parent)).forEach((_, i) => {
-                (<vscode.SnippetString>snippet).appendText(' ');
-                if (i < cellNames.length) {
-                    (<vscode.SnippetString>snippet).appendPlaceholder(cellNames[i]);
-                } else {
-                    (<vscode.SnippetString>snippet).appendPlaceholder(`cell${i+1}`);
-                }
-            });
             snippet.appendText(' >');
             break;
-        }
         case 'uint8-array':
             snippet.appendText(p.name + ' = [ ');
             snippet.appendTabstop();
@@ -564,7 +545,7 @@ class DTSEngine implements
 
         vscode.languages.setLanguageConfiguration('dts',
             <vscode.LanguageConfiguration>{
-                wordPattern: /(0x[a-fA-F\d]+|-?\d+|&?[#\w,-]+)/,
+                wordPattern: /&?[#\w@,-]+/,
                 comments: {
                     blockComment: ['/*', '*/'],
                     lineComment: '//'
@@ -576,15 +557,6 @@ class DTSEngine implements
                     ['[', ']'],
                 ]
             });
-
-        const timeStart = process.hrtime();
-        const bindingDirs = getBindingDirs();
-        Promise.all(bindingDirs.map(d => this.types.addFolder(d))).then(() => {
-            this.types.finalize();
-            const procTime = process.hrtime(timeStart);
-            console.log(`Found ${Object.keys(this.types.types).length} bindings in ${bindingDirs.join(', ')}. ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
-            this.parser.activate(ctx);
-        });
     }
 
     private setDiags(diags: DiagnosticsSet) {
@@ -817,18 +789,28 @@ class DTSEngine implements
     resolveCompletionItem?(item: vscode.CompletionItem, token: vscode.CancellationToken): vscode.ProviderResult<vscode.CompletionItem> {
         const n = item['dts-node-type'] as types.NodeType;
         if (n) {
+            const isAbsolutePath = n.name.startsWith('/');
             const parent = item['dts-parent'] as dts.Node;
             const snippet = new vscode.SnippetString();
-            snippet.appendPlaceholder(item.label);
+            if (isAbsolutePath) {
+                snippet.appendText(item.label);
+            } else {
+                snippet.appendPlaceholder(item.label);
+            }
+
             const addrCells = parent?.addrCells() ?? 2;
             const sizeCells = parent?.sizeCells() ?? 1;
-            const insertAddr = (addrCells === 1);
+            const insertAddr = (addrCells === 1 && !isAbsolutePath);
             if (insertAddr) {
                 snippet.appendText('@');
                 snippet.appendPlaceholder('0');
             }
 
-            snippet.appendText(` {\n\tcompatible = "${n.name}";\n`);
+            snippet.appendText(` {\n`);
+
+            if (!isAbsolutePath) {
+                snippet.appendText(`\tcompatible = "${n.name}";\n`);
+            }
 
             const insertValueSnippet = (p: types.PropertyType, insert?: any) => {
                 let surroundingBraces = [];
@@ -927,7 +909,7 @@ class DTSEngine implements
 
             item.detail = n.name;
             item.insertText = snippet;
-            item.documentation = n.description;
+            item.documentation = n.description ?? '';
         }
         return item;
     }
@@ -964,7 +946,14 @@ class DTSEngine implements
 
                 completion.detail = l.node.path;
                 if (l.type) {
-                    completion.documentation = new vscode.MarkdownString(`**${l.type.title}**\n\n${l.type.description}`);
+                    completion.documentation = new vscode.MarkdownString();
+                    if (l.type.title) {
+                        completion.documentation.appendMarkdown(`**${l.type.title}**\n\n`);
+                    }
+                    if (l.type.valid) {
+                        completion.documentation.appendText(`\n\n${l.type.description}`);
+                        completion.documentation.appendMarkdown(`\n\n\`${l.type.name}\``);
+                    }
                 }
                 return completion;
             });
@@ -1093,7 +1082,7 @@ class DTSEngine implements
                             }
 
                             completion.detail = type.title;
-                            completion.documentation = type.description;
+                            completion.documentation = type.description ?? '';
                             return completion;
                         })
                     ).reduce((all, types) => {
@@ -1112,20 +1101,32 @@ class DTSEngine implements
 
         let typeProps = node.type?.properties ?? [];
         if (!document.getWordRangeAtPosition(position)) {
-            typeProps = typeProps.filter(p => (p.name !== '#size-cells') && (p.name !== '#address-cells') && p.isLoaded && !nodeProps.find(pp => pp.name === p.name));
+            typeProps = typeProps.filter(p => (p.name !== '#size-cells') && (p.name !== '#address-cells') && p.isLoaded);
         }
 
         const propCompletions = typeProps
             .map(p => {
                 const completion = new vscode.CompletionItem(p.name, vscode.CompletionItemKind.Property);
                 completion.detail = Array.isArray(p.type) ? p.type[0] : p.type;
-                completion.documentation = p.description;
                 if (p.name === 'compatible') {
                     completion.kind = vscode.CompletionItemKind.TypeParameter;
                 }
 
-                // Put the properties at the top:
-                completion.sortText = '!!!' + completion.label;
+                const nodeProp = nodeProps.find(prop => prop.name === p.name);
+                if (nodeProp) {
+                    const md = new vscode.MarkdownString();
+                    md.appendText(p.description ?? '');
+                    const loc = nodeProp.loc.uri.fsPath + ':' + (nodeProp.loc.range.start.line + 1);
+                    md.appendMarkdown(`\n\n*Already defined at [${path.basename(loc)}](${vscode.Uri.parse('vscode://file/' + loc + ':' + (nodeProp.loc.range.start.character + 1))}):*`);
+                    md.appendCodeblock(nodeProp.toString(), 'dts');
+                    completion.documentation = md;
+                    // Not quite at the top:
+                    completion.sortText = '!!!' + completion.label;
+                } else {
+                    // Put the unused properties at the top:
+                    completion.sortText = '!!!!' + completion.label;
+                    completion.documentation = p.description ?? '';
+                }
 
                 completion.insertText = new vscode.SnippetString();
                 appendPropSnippet(p, completion.insertText, node);
@@ -1158,7 +1159,10 @@ class DTSEngine implements
             let name: string;
             // Find a reasonable name
             const parts = n.name?.split(',');
-            if (parts) {
+            if (n.name.match(/^\/[\w-,]+\/$/)) {
+                // absolute paths, e.g. /chosen/ should be stripped of their slashes
+                name = n.name.replace(/\//g, '');
+            } else if (parts.length > 1) {
                 // If the node is named something like "bosch,bme280", use "bme280":
                 name = parts.pop();
             } else if (n.filename) {

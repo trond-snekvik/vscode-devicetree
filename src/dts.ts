@@ -441,12 +441,14 @@ class ParserState {
     lines: Line[];
     uri: vscode.Uri;
 
-    location(start?: Offset) {
+    location(start?: Offset, end?: Offset) {
         if (!start) {
             start = this.prevRange.start;
         }
 
-        const end = <Offset>{ line: this.prevRange.start.line, col: this.prevRange.start.col + this.prevRange.length };
+        if (!end) {
+            end = <Offset>{ line: this.prevRange.start.line, col: this.prevRange.start.col + this.prevRange.length };
+        }
 
         const startLine = this.lines[start.line];
         const endLine = this.lines[end.line];
@@ -592,6 +594,10 @@ class ParserState {
         }
 
         return match[0];
+    }
+
+    reset(offset: Offset) {
+        this.offset = offset;
     }
 
     peek(pattern?: RegExp) {
@@ -765,7 +771,11 @@ export class Property {
     }
 
     get fullLoc() {
-        return new vscode.Location(this.loc.uri, this.loc.range.union(this.value[this.value.length - 1].loc.range)); // better than nothing
+        if (this.value.length) {
+            return new vscode.Location(this.loc.uri, this.loc.range.union(this.value[this.value.length - 1].loc.range)); // better than nothing
+        }
+
+        return this.loc;
     }
 
     get boolean() {
@@ -980,7 +990,7 @@ export class Property {
 
             // Get cells from parents:
             if (this.name.endsWith('s')) {
-                const parentName = this.entry.node.property(this.name.slice(0, this.name.length - 1) + '-parent')?.pHandle?.val;
+                const parentName = this.entry.node.parent?.property(this.name.slice(0, this.name.length - 1) + '-parent')?.pHandle?.val;
                 if (parentName) {
                     const parent = ctx.node(parentName);
                     const cellCount = parent?.cellCount(this.name);
@@ -1029,6 +1039,10 @@ export class Property {
                     return refCells.pop();
                 }
 
+                if (contents.length === 1) {
+                    return this.name.replace('#', 'Number of ').replace(/-/g, ' ');
+                }
+
                 return 'cell';
             });
         });
@@ -1039,6 +1053,10 @@ export class Property {
     }
 
     type(): string {
+        if (this.value.length === 0) {
+            return 'invalid';
+        }
+
         if (this.value.length === 1) {
             const v = this.value[0];
             if (v instanceof ArrayValue) {
@@ -1144,7 +1162,7 @@ export class DTSFile {
     includes: IncludeStatement[];
     macros: Macro[];
     diags: DiagnosticsSet;
-    dirty=false;
+    dirty=true;
     priority: number;
     ctx: DTSCtx;
 
@@ -1295,6 +1313,7 @@ export class Node {
     address?: number;
     type?: NodeType;
     entries: NodeEntry[];
+    pins?: {prop: Property, cells: IntValue[]}[];
 
     constructor(name: string, address?: string, parent?: Node) {
         if (address) {
@@ -1424,7 +1443,7 @@ export class Node {
         }
 
         if (expandChildren) {
-            result += children.map(c => c.toString(expandChildren, indent) + '\n').join('\n');
+            result += children.filter(c => !c.deleted).map(c => c.toString(expandChildren, indent) + '\n').join('\n');
         } else {
             result += children.map(c => indent + c.fullName + ' { /* ... */ };\n').join('\n');
         }
@@ -1467,17 +1486,17 @@ export class DTSCtx {
 
     reset() {
         // Kill all affected files:
-        if (this.dirty.some(uri => this.board?.has(uri))) {
-            this.board.remove();
+        if (this.dirty.some(uri => this.boardFile?.has(uri))) {
+            this.boardFile.remove();
         }
 
         this.overlays
             .filter(overlay => this.dirty.some(uri => overlay.has(uri)))
             .forEach(overlay => overlay.remove());
 
-        const removed = { board: this.board, overlays: this.overlays };
+        const removed = { board: this.boardFile, overlays: this.overlays };
 
-        this.board = null;
+        this.boardFile = null;
         this.overlays = [];
         this.nodes = {};
         this.dirty = [];
@@ -1541,7 +1560,7 @@ export class DTSCtx {
     }
 
     has(uri: vscode.Uri): boolean {
-        return !!this.board?.has(uri) || this.overlays.some(o => o.has(uri));
+        return !!this.boardFile?.has(uri) || this.overlays.some(o => o.has(uri));
     }
 
     getDiags(): DiagnosticsSet {
@@ -1680,12 +1699,10 @@ export class Parser {
         this.deleteEmitter = new vscode.EventEmitter();
         this.onDelete = this.deleteEmitter.event;
 
-        zephyr.modules().then(modules => {
-            modules.forEach(m => {
-                this.includes.push(m + '/include');
-                this.includes.push(m + '/dts');
-                this.includes.push(m + '/dts/common');
-            });
+        zephyr.modules.forEach(m => {
+            this.includes.push(m + '/include');
+            this.includes.push(m + '/dts');
+            this.includes.push(m + '/dts/common');
         });
     }
 
@@ -2214,7 +2231,7 @@ export class Parser {
         });
         time = process.hrtime(time);
         console.log(`Resolved types for ${file.uri.fsPath} in ${(time[0] * 1e9 + time[1]) / 1000000} ms`);
-
+        file.diags = state.diags;
         return file;
     }
 }

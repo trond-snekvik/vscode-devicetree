@@ -154,7 +154,7 @@ const interruptNode: PropertyType[] = [
         name: 'interrupt-parent',
         type: 'phandle',
         description: `Because the hierarchy of the nodes in the interrupt tree might not match the devicetree, the interrupt-parent property is available to make the definition of an interrupt parent explicit. The value is the phandle to the interrupt parent. If this property is missing from a device, its interrupt parent is assumed to be its devicetree parent.`,
-        required: true,
+        required: false,
     },
     {
         name: 'interrupts-extended',
@@ -377,6 +377,14 @@ export class TypeLoader {
             description: `A devicetree may have an aliases node (/aliases) that defines one or more alias properties. The alias node shall be at the root of the devicetree and have the node name /aliases. Each property of the /aliases node defines an alias. The property name specifies the alias name. The property value specifies the full path to a node in the devicetree. For example, the property serial0 = "/simple-bus@fe000000/ serial@llc500" defines the alias serial0. Alias names shall be a lowercase text strings of 1 to 31 characters from the following set of characters.\n\nAn alias value is a device path and is encoded as a string. The value represents the full path to a node, but the path does not need to refer to a leaf node. A client program may use an alias property name to refer to a full device path as all or part of its string value. A client program, when considering a string as a device path, shall detect and use the alias.`,
             properties: []
         }],
+        '/zephyr,user/': [{
+            name: '/zephyr,user/',
+            filename: '',
+            valid: true,
+            title: 'User defined properties',
+            description: `Convenience node for application specific properties. Properties in /zephyr,user/ don't need a devicetree binding, and can be used for any purpose. The type of the properties in the /zephyr,user node will be inferred from their value.`,
+            properties: []
+        }],
     };
     folders: string[] = []
     diags: DiagnosticsSet;
@@ -480,10 +488,6 @@ export class TypeLoader {
         const getBaseType = () => {
             const candidates = [node.path];
 
-            if (node.path.match(/\/cpus\/cpu[^/]*\/$/)) {
-                candidates.push('/cpus/cpu');
-            }
-
             const compatibleProp = props.find(p => p.name === 'compatible');
             if (compatibleProp) {
                 const compatible = compatibleProp.stringArray;
@@ -494,6 +498,10 @@ export class TypeLoader {
 
             candidates.push(node.name);
             candidates.push(node.name.replace(/s$/, ''));
+
+            if (node.path.match(/\/cpus\/cpu[^/]*\/$/)) {
+                candidates.push('/cpus/cpu');
+            }
 
             let types: NodeType[];
             if (candidates.some(c => (types = this.get(c)).length)) {

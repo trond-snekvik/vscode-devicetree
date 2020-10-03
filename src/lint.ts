@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getCells, getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, StringValue, DTSCtx, cellName } from './dts';
+import { getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, StringValue, DTSCtx, Property } from './dts';
 import * as types from './types';
 import { DiagnosticsSet } from './diags';
 
@@ -32,10 +32,10 @@ function lintNode(node: Node, ctx: LintCtx) {
             if (!prop.pHandleArray) {
                 ctx.diags.pushLoc(prop.loc, `reg property must be on the ${format} format`, vscode.DiagnosticSeverity.Error);
             } else {
-                prop.pHandleArray.forEach(p => {
-                    if (p.val.length % (addrCells + sizeCells)) {
+                prop.pHandleArray.forEach((p, i) => {
+                    if (p.val.length % (addrCells + sizeCells) || p.val.length === 0) {
                         ctx.diags.pushLoc(p.loc, `reg property must be on format ${format}.`, vscode.DiagnosticSeverity.Error);
-                    } else if (addrCells === 1 && Number.isInteger(node.address) && node.address !== p.val[0].val) {
+                    } else if (i === 0 && addrCells === 1 && Number.isInteger(node.address) && node.address !== p.val[0].val) {
                         ctx.diags.pushLoc(p.val[0].loc, `Node address does not match address cell (expected 0x${node.address.toString(16)})`);
                         const action = ctx.diags.pushAction(new vscode.CodeAction('Change to match node address', vscode.CodeActionKind.QuickFix));
                         action.edit = new vscode.WorkspaceEdit();
@@ -381,7 +381,7 @@ function lintNode(node: Node, ctx: LintCtx) {
         const ranges = new Array<{ n: Node, start: number, size: number }>();
         node.children().forEach(c => {
             const reg = c.property('reg');
-            if (c.enabled() && reg?.array) {
+            if (c.enabled() && !c.deleted && reg?.array) {
                 const range = { n: c, start: reg.array[0], size: reg.array[1] };
                 const overlap = ranges.find(r => r.start + r.size > range.start && range.start + range.size > r.start);
                 if (overlap) {
@@ -551,7 +551,7 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
 
         // Some nodes don't adhere to the normal type checking:
         const specialNodes = [
-            'chosen', 'aliases'
+            'chosen', 'aliases', 'zephyr,user'
         ];
 
         if (specialNodes.includes(node.name)) {
@@ -581,10 +581,10 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
             ctx.diags.pushLoc(prop.valueLoc, `Invalid property value`, vscode.DiagnosticSeverity.Error);
         } else if (propType.type !== 'compound') {
             if (Array.isArray(propType.type)) {
-                if (!propType.type.includes(actualPropType) && !propType.type.find(t => equivalent[t].includes(actualPropType))) {
+                if (!propType.type.includes(actualPropType) && !propType.type.find(t => equivalent[t]?.includes(actualPropType))) {
                     ctx.diags.pushLoc(prop.loc, `Property value type must be one of ${propType.type.join(', ')}, was ${actualPropType}`);
                 }
-            } else if (propType.type !== actualPropType && !equivalent[propType.type].includes(actualPropType)) {
+            } else if (propType.type && propType.type !== actualPropType && !equivalent[propType.type]?.includes(actualPropType)) {
                 ctx.diags.pushLoc(prop.loc, `Property value type must be ${propType.type}, was ${actualPropType}`);
             }
         }

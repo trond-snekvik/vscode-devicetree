@@ -5,9 +5,10 @@
         {"include": "#block-comment"},
         {"include": "#preprocessor-include"},
         {"include": "#preprocessor-define"},
-        {"include": "#preprocessor"},
         {"include": "#compiler-directive"},
         {"include": "#root-node"},
+        {"include": "#property"},
+        {"include": "#preprocessor"},
         {"include": "#node"},
         {"include": "#label"},
         {"include": "#node-ref"}
@@ -38,7 +39,7 @@
             ]
         },
         "preprocessor": {
-            "begin": "^\\s*#\\s*\\w+",
+            "begin": "^\\s*#\\s*\\w+\\b",
             "beginCaptures": {
                 "0": { "name": "keyword.control.preprocessor" }
             },
@@ -217,7 +218,7 @@
             ]
         },
         "property": {
-            "begin": "([\\w,\\.+?#\\-]+)\\s*(=)\\s*",
+            "begin": "([\\w,\\.+?#-]+)\\s*(=)\\s*",
             "end": "[;}]",
             "beginCaptures": {
                 "1": {"name": "variable.property"},
@@ -339,7 +340,7 @@
         },
         "expr-constant": {
             "match": "\\w+",
-            "name": "variable.parameter"
+            "name": "entity.name.tag"
         },
         "paren-expr": {
             "begin": "\\(",

@@ -150,12 +150,41 @@ export class ArrayValue extends PropertyValue {
                 continue;
             }
 
-            const unexpectedToken = state.peek();
-            if (unexpectedToken[0].match(/^[;,]/)) {
-                state.pushDiag(`Unterminated expression`, vscode.DiagnosticSeverity.Error, state.location(start));
-                state.pushInsertAction('Add closing bracket', ' >', state.location()).isPreferred = true;
-            } else {
-                state.pushDiag(`Unexpected token`, vscode.DiagnosticSeverity.Error);
+            // Unexpected data: Keep going until a potential closing bracket or semicolon
+            const startOfError = state.freeze();
+            state.skipToken();
+            let endOfError = state.freeze();
+
+            while (state.skipWhitespace()) {
+                const newProp = state.match(/^[=<{}]/);
+                if (newProp) {
+                    // We never hit any closing brackets or semicolons before the next value
+                    // Reset the state to avoid consuming these tokens:
+                    state.reset(startOfError);
+                    state.pushDiag(`Unterminated expression`, vscode.DiagnosticSeverity.Error, state.location(start));
+                    state.pushInsertAction('Add closing bracket', ' >', state.location()).isPreferred = true;
+                    break;
+                }
+
+                const terminators = state.match(/^[>;}]/);
+                if (terminators) {
+                    if (terminators[0] === '>') {
+                        state.pushDiag(`Syntax error`, vscode.DiagnosticSeverity.Error, state.location(startOfError, endOfError));
+                    } else {
+                        if (terminators[0] === ';') {
+                            // Reset to right before this to avoid getting the "Missing semicolon" error
+                            state.reset(endOfError);
+                        }
+
+                        state.pushDiag(`Unterminated expression`, vscode.DiagnosticSeverity.Error, state.location(start, endOfError));
+                        state.pushInsertAction('Add closing bracket', ' >', state.location(startOfError, endOfError)).isPreferred = true;
+                    }
+
+                    break;
+                }
+
+                state.skipToken();
+                endOfError = state.freeze();
             }
 
             break;
@@ -204,22 +233,35 @@ export class BytestringValue extends PropertyValue {
     }
 
     static match(state: ParserState): BytestringValue {
-        const byteArray = state.match(/^\[\s*((?:[\da-fA-F]{2}\s*)+)\]/);
-        if (byteArray) {
-            return new BytestringValue((byteArray[1] as string).match(/\S{2}/g).map(c => parseInt(c, 16)), state.location());
+        if (!state.match(/^\[/)) {
+            return;
         }
+
+        const start = state.freeze();
+        const bytes = new Array<number>();
+        let match: RegExpMatchArray;
+        while ((match = state.match(/^\s*([\da-fA-F]{2})/))) {
+            bytes.push(parseInt(match[1], 16));
+        }
+
+        if (!state.match(/^\s*]/)) {
+            state.pushDiag('Missing terminating ]', vscode.DiagnosticSeverity.Error);
+            state.pushInsertAction('Add terminating ]', ' ]').isPreferred = true;
+        }
+
+        return new BytestringValue(bytes, state.location(start));
     }
 
     toString() {
-        return `[ ${this.val.map(v => v.toString(16)).join(' ')} ]`;
+        return `[ ${this.val.map(v => (v < 0x10 ? '0' : '') + v.toString(16)).join(' ')} ]`;
     }
 }
 
 export class PHandle extends PropertyValue {
     val: string;
-    kind: 'ref' | 'pathRef' | 'string';
+    kind: 'ref' | 'pathRef' | 'string' | 'invalid';
 
-    private constructor(value: string, isRef: boolean, loc: vscode.Location, kind: 'ref' | 'pathRef' | 'string') {
+    private constructor(value: string, loc: vscode.Location, kind: 'ref' | 'pathRef' | 'string' | 'invalid') {
         super(value, loc);
         this.kind = kind;
     }
@@ -236,30 +278,37 @@ export class PHandle extends PropertyValue {
     static match(state: ParserState): PHandle {
         let phandle = state.match(/^&\{([\w/@-]+)\}/); // path reference
         if (phandle) {
-            return new PHandle(phandle[1], false, state.location(), 'pathRef');
+            return new PHandle(phandle[1], state.location(), 'pathRef');
         }
 
         phandle = state.match(/^&[\w-]+/);
         if (phandle) {
-            return new PHandle(phandle[0], true, state.location(), 'ref');
+            return new PHandle(phandle[0], state.location(), 'ref');
         }
         // can be path:
         phandle = state.match(/^"(.+?)"/); // deprecated?
         if (phandle) {
-            return new PHandle(phandle[1], false, state.location(), 'string');
+            return new PHandle(phandle[1], state.location(), 'string');
+        }
+
+        // Incomplete:
+        phandle = state.match(/^&/);
+        if (phandle) {
+            return new PHandle(phandle[0], state.location(), 'invalid');
         }
     }
 
     toString(raw=true) {
-        if (this.kind === 'ref') {
+        switch (this.kind) {
+        case 'ref':
             return raw ? this.val : `< ${this.val} >`;
-        }
-
-        if (this.kind === 'pathRef') {
+        case 'pathRef':
             return raw ? `&{${this.val}}` : `< &{${this.val}} >`;
+        case 'string':
+            return `"${this.val}"`;
+        case 'invalid':
+            return '';
         }
-
-        return `"${this.val}"`;
     }
 }
 
@@ -600,7 +649,6 @@ function parsePropValue(state: ParserState) {
     const elems: PropertyValue[] = [];
 
     const valueTypes = [ArrayValue, StringValue, BytestringValue, PHandle];
-    let lastValidLoc = state.location();
     let missingComma: vscode.Location;
 
     while (state.skipWhitespace()) {
@@ -630,7 +678,6 @@ function parsePropValue(state: ParserState) {
         valueTypes.find(type => match = type.match(state));
         if (match) {
             elems.push(match);
-            lastValidLoc = state.location();
             continue;
         }
 
@@ -649,7 +696,7 @@ function parsePropValue(state: ParserState) {
         /* As none of the value types matched, there's a format error in this value.
          * We'll just exit without consuming the next token, as this is likely a missing semicolon.
          */
-        break;
+        return elems;
     }
 
     if (elems.length === 0) {

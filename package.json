@@ -73,6 +73,12 @@
                 "title": "Devicetree: Set board...",
                 "enablement": "editorLangId == dts && !editorReadonly || sideBarVisible",
                 "icon": "$(edit)"
+            },
+            {
+                "command": "devicetree.getMacro",
+                "title": "Devicetree: Copy C identifier to clipboard",
+                "enablement": "editorLangId == dts && resourceScheme == file",
+                "icon": "$(edit)"
             }
         ],
         "languages": [
@@ -110,6 +116,13 @@
                     "command": "devicetree.showOutput",
                     "when": "editorLangId == dts && !editorReadonly",
                     "group": "1_run"
+                }
+            ],
+            "editor/context": [
+                {
+                    "command": "devicetree.getMacro",
+                    "when": "editorLangId == dts && !editorReadonly",
+                    "group": "9_cutcopypaste"
                 }
             ],
             "view/title": [

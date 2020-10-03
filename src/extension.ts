@@ -536,10 +536,104 @@ class DTSEngine implements
             });
         });
 
+        vscode.commands.registerCommand('devicetree.getMacro', () => {
+            const ctx = this.parser.currCtx;
+            const selection = vscode.window.activeTextEditor?.selection;
+            const uri = vscode.window.activeTextEditor?.document.uri;
+            if (!ctx || !selection || !uri) {
+                return;
+            }
 
-        vscode.commands.registerCommand('devicetree.showOutput', () => {
-            if (vscode.window.activeTextEditor?.document.languageId === 'dts') {
-                vscode.window.showTextDocument(vscode.Uri.parse('devicetree://' + vscode.window.activeTextEditor?.document.uri.path), { viewColumn: vscode.ViewColumn.Beside });
+            const toMacro = (text: string) => text.replace(/[-@]/g, '_').replace(/\/|^#/g, '').toLowerCase();
+
+            const nodeMacro = (node: dts.Node) => {
+                const labels = node.labels();
+                if (labels.length) {
+                    return `DT_NODELABEL(${toMacro(labels[0])})`;
+                }
+
+                if (node.parent) {
+                    const parent = nodeMacro(node.parent);
+
+                    // better to do DT_PATH(a, b, c) than DT_CHILD(DT_CHILD(a, b), c)
+                    if (!parent.startsWith('DT_NODELABEL(')) {
+                        return `DT_PATH(${toMacro(node.path.slice(1, node.path.length - 1).replace(/\//g, ', '))})`;
+                    }
+
+                    return `DT_CHILD(${parent}, ${toMacro(node.fullName)})`;
+                }
+
+                return `DT_N`;
+            };
+
+            const propMacro = (prop: dts.Property) => {
+                // Selecting the property name
+                if (prop.loc.range.contains(selection)) {
+                    if (prop.name === 'label') {
+                        return `DT_LABEL(${nodeMacro(prop.entry.node)})`;
+                    }
+
+                    // Not generated for properties like #gpio-cells
+                    if (prop.name.startsWith('#')) {
+                        return;
+                    }
+
+                    return `DT_PROP(${nodeMacro(prop.entry.node)}, ${toMacro(prop.name)})`;
+                }
+
+                // Selecting a phandle:
+                const val = prop.valueAt(selection.start, uri);
+                if (val instanceof dts.ArrayValue) {
+                    const cell = val.cellAt(selection.start, uri);
+                    if (cell instanceof dts.PHandle) {
+                        const node = ctx.node(cell.val);
+                        if (node) {
+                            return nodeMacro(node);
+                        }
+                    } else if (prop.name === 'reg') {
+                        const valIdx = prop.value.indexOf(val);
+                        const cellIdx = val.val.indexOf(cell);
+                        const names = prop.cellNames(ctx);
+                        if (names?.length) {
+                            const name = names?.[valIdx % names.length]?.[cellIdx];
+                            if (name) {
+                                if (prop.regs?.length === 1) {
+                                    // Name is either size or addr
+                                    return `DT_REG_${name.toUpperCase()}(${nodeMacro(prop.entry.node)})`;
+                                } else {
+                                    // Name is either size or addr
+                                    return `DT_REG_${name.toUpperCase()}_BY_IDX(${nodeMacro(prop.entry.node)}, ${valIdx})`;
+                                }
+                            }
+                        }
+                    } else if (val.isNumberArray()) {
+                        const cellIdx = val.val.indexOf(cell);
+                        return `DT_PROP_BY_IDX(${nodeMacro(prop.entry.node)}, ${prop.name}, ${cellIdx})`;
+                    } else {
+                        const names = prop.cellNames(ctx);
+                        if (names?.length) {
+                            const idx = val.val.indexOf(cell);
+                            if (idx >= 0) {
+                                return `DT_PROP(${nodeMacro(prop.entry.node)}, ${toMacro(prop.name)})`;
+                            }
+                        }
+                    }
+                }
+            };
+
+            let macro: string;
+            const prop = ctx.getPropertyAt(selection.start, uri);
+            if (prop) {
+                macro = propMacro(prop);
+            } else {
+                const entry = ctx.getEntryAt(selection.start, uri);
+                if (entry?.nameLoc.range.contains(selection.start)) {
+                    macro = nodeMacro(entry.node);
+                }
+            }
+
+            if (macro) {
+                vscode.env.clipboard.writeText(macro).then(() => vscode.window.setStatusBarMessage(`Copied "${macro}" to clipboard`, 3000));
             }
         });
 

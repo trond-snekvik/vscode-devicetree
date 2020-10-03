@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2020 Trond Snekvik
+ *
+ * SPDX-License-Identifier: MIT
+ */
 import * as vscode from 'vscode';
 import { getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, StringValue, DTSCtx, Property } from './dts';
 import * as types from './types';

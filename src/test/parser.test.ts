@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2020 Trond Snekvik
+ *
+ * SPDX-License-Identifier: MIT
+ */
 import * as vscode from 'vscode';
 import * as assert from 'assert';
 import { after } from 'mocha';

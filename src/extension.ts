@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2020 Trond Snekvik
+ *
+ * SPDX-License-Identifier: MIT
+ */
 'use strict';
 import * as vscode from 'vscode';
 import * as dts from './dts';

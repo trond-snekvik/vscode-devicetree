@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2020 Trond Snekvik
+ *
+ * SPDX-License-Identifier: MIT
+ */
 import * as yaml from 'js-yaml';
 import * as glob from 'glob';
 import * as vscode from 'vscode';

@@ -815,25 +815,59 @@ class DTSEngine implements
         }
 
         const symbol = document.getText(word);
-        const node = file.getNodeAt(position, document.uri);
-        if (!node) {
+        const entry = file.getEntryAt(position, document.uri);
+        if (!entry) {
             return;
         }
 
+        const node = entry.node;
         const type = node.type ?? this.types.baseType;
-        const prop = type.properties.find(p => p.name === symbol);
-        if (prop) {
-            const results: vscode.MarkedString[] = [];
-            if (prop.description) {
-                results.push(new vscode.MarkdownString(prop.description));
+        const prop = entry.properties.find(p => p.fullLoc.uri.toString() === document.uri.toString() && p.fullLoc.range.contains(position));
+        const value = prop?.valueAt(position, document.uri);
+        if (value) {
+            if (value instanceof dts.ArrayValue) {
+                const cell = value.cellAt(position, document.uri);
+                if (cell && file.ctx) {
+                    const names = prop.cellNames(file.ctx);
+                    const entry = names?.[prop.value.indexOf(value) % (names?.length || 1)];
+                    const name = entry?.[value.val.indexOf(cell) % (entry?.length || 1)] as string;
+                    if (name) {
+                        return new vscode.Hover(name, cell.loc.range);
+                    }
+                }
             }
-            results.push(new vscode.MarkdownString('type: `' + (Array.isArray(prop.type) ? prop.type.join('`, `') : prop.type) + '`'));
+        }
+
+        const propType = type.properties.find(p => p.name === symbol);
+        if (propType) {
+            const results: vscode.MarkdownString[] = [];
+            if (propType.description) {
+                results.push(new vscode.MarkdownString(propType.description));
+            }
+            results.push(new vscode.MarkdownString('type: `' + (Array.isArray(propType.type) ? propType.type.join('`, `') : propType.type) + '`'));
+
+            if (propType.name.endsWith('-map') && propType.name !== 'interrupt-map') {
+                const p = file.getPropertyAt(position, document.uri);
+                const nexusMap = p?.nexusMap;
+                if (nexusMap) {
+                    const identifier = propType.name.slice(0, propType.name.length - 4);
+                    const nexusText = new vscode.MarkdownString(`Nexus map for \`${identifier}s\` properties.\n\n`);
+                    nexusText.appendMarkdown(`Nexus nodes' \`-map\` properties are translation tables from one domain to another.\n\n`);
+                    nexusText.appendMarkdown(`Each entry in the nexus map defines one translation from \`${identifier}\` references to this node to the mapped node.`);
+                    if (nexusMap.length) {
+                        nexusText.appendMarkdown(`\n\nFor instance, because of the first entry in this map,`);
+                        nexusText.appendCodeblock(`${identifier}s = < ${p.entry.node.refName} ${nexusMap[0].in.map(i => i.toString(true)).join(' ')} >;`, 'dts');
+                        nexusText.appendMarkdown(`is equivalent to`);
+                        nexusText.appendCodeblock(`${identifier}s = < ${nexusMap[0].target.toString(true)} ${nexusMap[0].out.map(i => i.toString(true)).join(' ')} >;`, 'dts');
+                    }
+                    results.push(nexusText);
+                }
+            }
             return new vscode.Hover(results, word);
         }
 
-        const entry = node.entries.find(e => e.nameLoc.uri.fsPath === document.uri.fsPath && e.nameLoc.range.contains(position));
-        if (entry) {
-            const results: vscode.MarkedString[] = [];
+        if (entry.nameLoc.range.contains(position)) {
+            const results: vscode.MarkdownString[] = [];
             if (type.title) {
                 results.push(new vscode.MarkdownString(type.title));
             }

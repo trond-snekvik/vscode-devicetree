@@ -85,7 +85,7 @@
             {
                 "id": "dts",
                 "aliases": [
-                    "DeviceTree"
+                    "Devicetree"
                 ],
                 "configuration": "syntax/devicetree-language.json",
                 "extensions": [

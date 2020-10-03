@@ -10,6 +10,8 @@ const conf = vscode.workspace.getConfiguration();
 export let zephyrRoot: string;
 let westExe: string;
 let westVersion: string;
+let boards: Board[];
+export let modules: string[];
 
 function west(...args: string[]): Promise<string> {
 
@@ -30,10 +32,6 @@ function west(...args: string[]): Promise<string> {
 	});
 }
 
-export function modules(): Promise<string[]> {
-	return west('list', '-f', '{posixpath}').then(out => out.split(/\r?\n/), _ => []);
-}
-
 export function openConfig(entry: string) {
 	vscode.commands.executeCommand('workbench.action.openSettings', entry);
 }
@@ -41,15 +39,7 @@ export function openConfig(entry: string) {
 async function findWest() {
 	if (!(westExe = conf.get('devicetree.west') as string) &&
 		!(westExe = conf.get('kconfig.zephyr.west') as string)) {
-		if (process.platform === 'win32') {
-			westExe = 'west';
-		} else {
-			westExe = [
-				env['HOME'] + '/.local/bin/west',
-				'/usr/local/bin/west',
-				'/usr/bin/west',
-			].find(p => existsSync(p)) ?? 'west';
-		}
+		westExe = 'west';
 	}
 
 	return west('-V').then(version => {
@@ -66,7 +56,7 @@ async function findZephyrRoot() {
 		!(zephyrRoot = conf.get('kconfig.zephyr.base') as string) &&
 		!(zephyrRoot = env['ZEPHYR_BASE'] as string)) {
 		return Promise.all([west('topdir'), west('config', 'zephyr.base')]).then(([topdir, zephyr]) => {
-			zephyrRoot = path.resolve(topdir.trim() + '/' + zephyr.trim());
+			zephyrRoot = path.join(topdir.trim(), zephyr.trim());
 		}, err => {
 			vscode.window.showErrorMessage(`Couldn't find Zephyr root`, 'Configure...').then(() => {
 				openConfig('devicetree.zephyr');
@@ -75,46 +65,8 @@ async function findZephyrRoot() {
 	}
 }
 
-
-async function* boardRoots(): AsyncIterable<string> {
-	if (zephyrRoot) {
-		yield zephyrRoot + '/boards';
-	}
-
-	for (const module of await modules()) {
-		const dir = module.trim();
-		if (dir && existsSync(dir + '/boards')) {
-			yield dir + '/boards';
-		}
-	}
-}
-
-async function findBoards(filter='*', maxCount=0): Promise<Board[]> {
-	const boards = new Array<Board>();
-	for await (const root of boardRoots()) {
-		const g = new glob.Glob(`**/${filter}.dts`, { cwd: root });
-		g.on('match', (m: string) => {
-			boards.push({name: path.basename(m, '.dts'), path: `${root}/${m}`, arch: m.split(/[/\\]/)?.[0]});
-			if (maxCount && boards.length === maxCount) {
-				g.abort();
-			}
-		});
-
-		await new Promise(resolve => {
-			g.on('end', resolve);
-			g.on('abort', resolve);
-		});
-
-		if (maxCount && boards.length === maxCount) {
-			break;
-		}
-	}
-
-	return boards;
-}
-
-export async function findBoard(board: string): Promise<Board> {
-	return findBoards(board, 1).then(boards => boards[0]);
+export function findBoard(board: string): Board {
+	return boards.find(b => b.name === board);
 }
 
 export async function isBoardFile(uri: vscode.Uri) {
@@ -122,7 +74,7 @@ export async function isBoardFile(uri: vscode.Uri) {
 		return false;
 	}
 
-	for await (const root of boardRoots()) {
+	for (const root of boardRoots()) {
 		if (uri.fsPath.startsWith(path.normalize(root))) {
 			return true;
 		}
@@ -152,17 +104,39 @@ export async function defaultBoard(): Promise<Board> {
 	}
 
 	console.log('Using fallback board');
-	return (await findBoard('nrf52dk_nrf52832')) ?? (await findBoard('nrf52_pca10040'));
+	return findBoard('nrf52dk_nrf52832') ?? findBoard('nrf52_pca10040');
 }
 
-export async function selectBoard(): Promise<Board> {
-	return vscode.window.showQuickPick((await findBoards()).map(board => <vscode.QuickPickItem>{ label: board.name, detail: board.arch, board }), { placeHolder: 'Default board' }).then(board => board['board']);
+function boardRoots(): string[] {
+	return modules.map(m => m + '/boards').filter(dir => existsSync(dir));
+}
+
+function findBoards() {
+	boards = new Array<Board>();
+	for (const root of boardRoots()) {
+		glob(`**/*.dts`, {cwd: root}, (err, matches) => {
+			if (!err) {
+				matches.forEach(m => boards.push({name: path.basename(m, '.dts'), path: `${root}/${m}`, arch: m.split(/[/\\]/)?.[0]}));
+			}
+		});
+	}
+}
+
+async function loadModules() {
+	modules = await west('list', '-f', '{posixpath}').then(out => out.split(/\r?\n/).map(line => line.trim()), _ => []);
+	findBoards();
+	return boards;
+}
+
+export async function selectBoard(prompt='Set board'): Promise<Board> {
+	return vscode.window.showQuickPick(boards.map(board => <vscode.QuickPickItem>{ label: board.name, description: board.arch, board }), { placeHolder: prompt }).then(board => board['board']);
 }
 
 export async function activate(ctx: vscode.ExtensionContext) {
 	await findWest();
 	await findZephyrRoot();
 	if (zephyrRoot) {
+		await loadModules();
 		return;
 	}
 
@@ -173,6 +147,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 				await findWest();
 				await findZephyrRoot();
 				if (zephyrRoot) {
+					await loadModules();
 					resolve();
 				}
 			}

@@ -6,6 +6,7 @@ import * as zephyr from './zephyr';
 import {lint, LintCtx} from './lint';
 import * as path from 'path';
 import { DiagnosticsSet } from './diags';
+import { existsSync, readFile, writeFile, writeFileSync } from 'fs';
 
 function getConfig(variable: string) {
     const config = vscode.workspace.getConfiguration('devicetree');
@@ -159,6 +160,16 @@ class DTSDocumentProvider implements vscode.TextDocumentContentProvider {
 
 }
 
+function iconPath(name: string) {
+    return {
+        dark: vscode.Uri.file(__dirname + `/../../icons/dark/${name}.svg`),
+        light: vscode.Uri.file(__dirname + `/../../icons/light/${name}.svg`),
+    };
+}
+
+type StoredCtx = { name: string, boardFile: string, overlays: string[], board: zephyr.Board };
+type NestedInclude = { uri: vscode.Uri, file: dts.DTSFile };
+
 class DTSEngine implements
     vscode.DocumentSymbolProvider,
     vscode.WorkspaceSymbolProvider,
@@ -168,16 +179,24 @@ class DTSEngine implements
     vscode.SignatureHelpProvider,
     vscode.DocumentRangeFormattingEditProvider,
     vscode.DocumentLinkProvider,
-    vscode.ReferenceProvider {
+    vscode.ReferenceProvider,
+    vscode.TypeDefinitionProvider,
+    vscode.TreeDataProvider<dts.DTSCtx | dts.DTSFile | NestedInclude> {
     parser: dts.Parser;
     diags: vscode.DiagnosticCollection;
     diagSet?: DiagnosticsSet;
     types: types.TypeLoader;
+    treeView: vscode.TreeView<dts.DTSCtx | dts.DTSFile | NestedInclude>;
     prevDiagUris: vscode.Uri[] = [];
+    private treeDataChange: vscode.EventEmitter<void | dts.DTSCtx>;
+    onDidChangeTreeData: vscode.Event<void | dts.DTSCtx>;
 
     constructor() {
         this.diags = vscode.languages.createDiagnosticCollection('DeviceTree');
         this.types = new types.TypeLoader();
+
+        this.treeDataChange = new vscode.EventEmitter<void | dts.DTSCtx>();
+        this.onDidChangeTreeData = this.treeDataChange.event;
 
         const defines = (getConfig('deviceTree.defines') ?? {}) as {[name: string]: string};
 
@@ -187,13 +206,116 @@ class DTSEngine implements
                 diags: new DiagnosticsSet(),
                 types: this.types,
                 ctx,
+                gpioControllers: [],
             };
 
             lint(lintCtx);
             const diags = ctx.getDiags();
             diags.merge(lintCtx.diags);
             this.setDiags(diags);
+            this.treeDataChange.fire();
         });
+
+        this.parser.onOpen(() => {
+            this.saveCtxs();
+        });
+
+        this.parser.onDelete(() => {
+            this.treeDataChange.fire();
+            this.saveCtxs();
+        });
+    }
+
+    private treeFileChildren(file: dts.DTSFile, uri: vscode.Uri) {
+        return file.includes
+            .filter(i => i.loc.uri.toString() === uri.toString())
+            .map(i => (<NestedInclude>{ uri: i.dst, file }));
+    }
+
+    getTreeItem(element: dts.DTSCtx | dts.DTSFile | NestedInclude): vscode.TreeItem | Thenable<vscode.TreeItem> {
+        if (element instanceof dts.DTSCtx) {
+            let file: dts.DTSFile;
+            if (element.overlays.length) {
+                file = element.overlays[element.overlays.length - 1];
+            } else {
+                file = element.boardFile;
+            }
+
+            if (!file) {
+                return;
+            }
+
+            const item = new vscode.TreeItem(element.name,
+                this.parser.currCtx === element ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+            item.contextValue = 'devicetree.ctx';
+            item.tooltip = 'Devicetree Context';
+            item.id = ['devicetree', 'ctx', element.name, file.uri.fsPath.replace(/[/\\]/g, '.')].join('.');
+            item.iconPath = iconPath('devicetree-inner');
+            return item;
+        }
+
+        if (element instanceof dts.DTSFile) {
+            const item = new vscode.TreeItem(path.basename(element.uri.fsPath));
+            if (element.includes.length) {
+                item.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+            }
+            item.resourceUri = element.uri;
+            item.command = { command: 'vscode.open', title: 'Open file', arguments: [element.uri] };
+            item.id === ['devicetree', 'file', element.ctx.name, element.uri.fsPath.replace(/[/\\]/g, '.')].join('.');
+            if (element.ctx.boardFile === element) {
+                item.iconPath = iconPath('circuit-board');
+                item.tooltip = 'Board file';
+                item.contextValue = 'devicetree.board';
+            } else {
+                if (element.ctx.overlays.indexOf(element) === element.ctx.overlays.length - 1) {
+                    item.iconPath = iconPath('overlay');
+                    item.contextValue = 'devicetree.overlay';
+                } else {
+                    item.iconPath = iconPath('shield');
+                    item.contextValue = 'devicetree.shield';
+                }
+                item.tooltip = 'Overlay';
+            }
+            return item;
+        }
+
+        // Nested include
+        const item = new vscode.TreeItem(path.basename(element.uri.fsPath));
+        item.resourceUri = element.uri;
+        if (this.treeFileChildren(element.file, element.uri).length) {
+            item.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+        }
+        item.iconPath = vscode.ThemeIcon.File;
+        item.description = '- include';
+        item.command = { command: 'vscode.open', title: 'Open file', arguments: [element.uri] };
+        return item;
+    }
+
+    getChildren(element?: dts.DTSCtx | dts.DTSFile | NestedInclude): vscode.ProviderResult<(dts.DTSCtx | dts.DTSFile | NestedInclude)[]> {
+        if (!element) {
+            return this.parser.contexts;
+        }
+
+        if (element instanceof dts.DTSCtx) {
+            return element.files;
+        }
+
+        if (element instanceof dts.DTSFile) {
+            return this.treeFileChildren(element, element.uri);
+        }
+
+        // Nested include:
+        return this.treeFileChildren(element.file, element.uri);
+    }
+
+    getParent(element: dts.DTSCtx | dts.DTSFile | NestedInclude): vscode.ProviderResult<dts.DTSCtx> {
+        if (element instanceof dts.DTSCtx) {
+            return;
+        }
+        if (element instanceof dts.DTSFile)  {
+            return element.ctx;
+        }
+
     }
 
     /** Returns all pHandle references to the node under cursor.  */
@@ -229,7 +351,57 @@ class DTSEngine implements
         return this.diagSet.getActions(document.uri, range).filter(action => !context.only || context.only === action.kind);
     }
 
-    activate(ctx: vscode.ExtensionContext) {
+    async loadCtxs() {
+        const file = config.get('ctxFile') as string;
+        if (!file) {
+            return;
+        }
+
+        const text = await new Promise<string>(resolve => readFile(file, 'utf-8', (_, data) => resolve(data))) ?? '';
+        const json: StoredCtx[] = JSON.parse(text) || [];
+        await Promise.all(json.map(ctx => this.parser.addContext(ctx.board ?? vscode.Uri.file(ctx.boardFile), ctx.overlays.map(o => vscode.Uri.file(o)), ctx.name)));
+    }
+
+    async saveCtxs(createFile=true) {
+        const file = getConfig('ctxFile') as string;
+
+        vscode.commands.executeCommand('setContext', 'devicetree:dirtyConfig', true);
+
+        let uri: vscode.Uri;
+        if (file && existsSync(file)) {
+            uri = vscode.Uri.file(file);
+        } else if (createFile) {
+            uri = (await vscode.window.showSaveDialog({ filters: { 'json': ['json'] }, defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri }));
+            if (!uri) {
+                return;
+            }
+
+            config.update('ctxFile', uri.fsPath, vscode.ConfigurationTarget.Workspace);
+        } else {
+            return;
+        }
+
+        const json = this.parser.contexts.map(ctx => ({name: ctx.name, boardFile: ctx.boardFile.uri.fsPath, overlays: ctx.overlays.map(o => o.uri.fsPath), board: ctx.board}));
+        writeFile(uri.fsPath, JSON.stringify(json, null, '\t'), err => {
+            if (err) {
+                vscode.window.showErrorMessage('Failed storing config: ' + err);
+            } else {
+                vscode.commands.executeCommand('setContext', 'devicetree:dirtyConfig', false);
+            }
+
+        });
+    }
+
+    async activate(ctx: vscode.ExtensionContext) {
+        const timeStart = process.hrtime();
+        const bindingDirs = getBindingDirs();
+        await Promise.all(bindingDirs.map(d => this.types.addFolder(d)));
+        this.types.finalize();
+        const procTime = process.hrtime(timeStart);
+        console.log(`Found ${Object.keys(this.types.types).length} bindings in ${bindingDirs.join(', ')}. ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
+        await this.loadCtxs();
+        this.parser.activate(ctx);
+
         const selector = <vscode.DocumentFilter>{ language: 'dts', scheme: 'file' };
         let disposable = vscode.languages.registerDocumentSymbolProvider(selector, this);
         ctx.subscriptions.push(disposable);
@@ -253,6 +425,136 @@ class DTSEngine implements
         ctx.subscriptions.push(disposable);
         disposable = vscode.languages.registerReferenceProvider(selector, this);
         ctx.subscriptions.push(disposable);
+        disposable = vscode.languages.registerTypeDefinitionProvider(selector, this);
+        ctx.subscriptions.push(disposable);
+        this.treeView = vscode.window.createTreeView('trond-snekvik.devicetree.ctx', {showCollapseAll: true, canSelectMany: false, treeDataProvider: this});
+
+        vscode.window.onDidChangeActiveTextEditor(e => {
+            if (!this.treeView.visible) {
+                return;
+            }
+
+            const file = this.parser.file(e.document.uri);
+            if (file) {
+                this.treeView.reveal(file);
+            }
+        });
+
+        vscode.commands.registerCommand('devicetree.showOutput', (uri: dts.DTSCtx | vscode.Uri) => {
+            if (uri instanceof dts.DTSCtx) {
+                uri = uri.files.pop()?.uri;
+            } else if (!uri && vscode.window.activeTextEditor?.document.languageId === 'dts') {
+                uri = vscode.window.activeTextEditor?.document.uri;
+            }
+
+            if (uri) {
+                vscode.window.showTextDocument(vscode.Uri.parse('devicetree://' + uri.path), { viewColumn: vscode.ViewColumn.Beside });
+            }
+        });
+
+        vscode.commands.registerCommand('devicetree.newApp', async () => {
+            const folder = await vscode.window.showOpenDialog({
+                canSelectFiles: false,
+                canSelectFolders: true,
+                canSelectMany: false,
+                openLabel: 'Select folder',
+                defaultUri: vscode.window.activeTextEditor?.document?.uri ?? vscode.workspace.workspaceFolders?.[0].uri,
+            }).then(uris => uris?.[0].fsPath, () => undefined);
+
+            if (!folder) {
+                return;
+            }
+
+            const board = await zephyr.selectBoard();
+            if (!board) {
+                return;
+            }
+            const file = path.join(folder, board.name + '.overlay');
+            if (!existsSync(file)) {
+                writeFileSync(file, '');
+            }
+
+            vscode.window.showTextDocument(vscode.Uri.file(file));
+        });
+
+        vscode.commands.registerCommand('devicetree.save', () => this.saveCtxs());
+
+        vscode.commands.registerCommand('devicetree.ctx.addShield', () => {
+            if (this.parser.currCtx && vscode.window.activeTextEditor?.document.languageId === 'dts') {
+                const options = <vscode.OpenDialogOptions>{
+                    canSelectFiles: true,
+                    openLabel: 'Add shield file',
+                    canSelectMany: true,
+                    defaultUri: vscode.Uri.file(path.resolve(zephyr.zephyrRoot, 'boards', 'shields')),
+                    filters: { 'Devicetree': ['dts', 'dtsi', 'overlay'] },
+                };
+                vscode.window.showOpenDialog(options).then(uris => {
+                    if (uris) {
+                        this.parser.insertOverlays(...uris).then(() => {
+                            this.saveCtxs(false);
+                            if (uris.length === 1) {
+                                vscode.window.showInformationMessage(`Added shield overlay ${path.basename(uris[0].fsPath)}.`);
+                            } else {
+                                vscode.window.showInformationMessage(`Added ${uris.length} shield overlays.`);
+                            }
+                        });
+                    }
+                });
+            }
+        });
+
+        vscode.commands.registerCommand('devicetree.ctx.rename', (ctx?: dts.DTSCtx) => {
+            ctx = ctx ?? this.parser.currCtx;
+            if (!ctx) {
+                return;
+            }
+
+            vscode.window.showInputBox({ prompt: 'New Devicetree context name', value: ctx.name }).then(value => {
+                if (value) {
+                    ctx._name = value;
+                    this.treeDataChange.fire(ctx);
+                    this.saveCtxs(false);
+                }
+            });
+        });
+
+        vscode.commands.registerCommand('devicetree.ctx.delete', (ctx?: dts.DTSCtx) => {
+            ctx = ctx ?? this.parser.currCtx;
+            if (!ctx || !(ctx instanceof dts.DTSCtx)) {
+                return;
+            }
+
+            const deleteCtx = () => {
+                this.parser.removeCtx(ctx);
+            };
+
+            // Only prompt if this context actually took some effort
+            if (ctx.overlays.length > 1 || ctx._name) {
+                vscode.window.showWarningMessage(`Delete devicetree context "${ctx.name}"?`, {modal: true}, 'Delete').then(button => {
+                    if (button === 'Delete') {
+                        deleteCtx();
+                    }
+                });
+            } else {
+                deleteCtx();
+            }
+        });
+
+        vscode.commands.registerCommand('devicetree.ctx.setBoard', (file?: dts.DTSFile) => {
+            const ctx = file?.ctx ?? this.parser.currCtx;
+            if (!ctx) {
+                return;
+            }
+
+            zephyr.selectBoard().then(board => {
+                if (board) {
+                    this.parser.setBoard(board, ctx).then(() => {
+                        this.saveCtxs(false);
+                    });
+                }
+            });
+        });
+
 
         vscode.commands.registerCommand('devicetree.showOutput', () => {
             if (vscode.window.activeTextEditor?.document.languageId === 'dts') {

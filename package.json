@@ -25,7 +25,54 @@
             {
                 "command": "devicetree.showOutput",
                 "title": "Devicetree: Show compiled output",
-                "enablement": "editorLangId == dts"
+                "enablement": "editorLangId == dts && !editorReadonly || sideBarVisible",
+                "icon": "$(open-preview)"
+            },
+            {
+                "command": "devicetree.newApp",
+                "title": "Devicetree: New Application",
+                "icon": "$(plus)"
+            },
+            {
+                "command": "devicetree.ctx.addShield",
+                "title": "Devicetree: Add shield...",
+                "enablement": "editorLangId == dts && !editorReadonly || sideBarVisible",
+                "icon": {
+                    "dark": "icons/dark/add-shield.svg",
+                    "light": "icons/light/add-shield.svg"
+                }
+            },
+            {
+                "command": "devicetree.ctx.removeShield",
+                "title": "Devicetree: Remove shield",
+                "enablement": "editorLangId == dts && !editorReadonly || sideBarVisible",
+                "icon": {
+                    "dark": "icons/dark/remove-shield.svg",
+                    "light": "icons/light/remove-shield.svg"
+                }
+            },
+            {
+                "command": "devicetree.ctx.rename",
+                "title": "Devicetree: Rename context",
+                "enablement": "editorLangId == dts && !editorReadonly || sideBarVisible",
+                "icon": "$(edit)"
+            },
+            {
+                "command": "devicetree.ctx.delete",
+                "title": "Devicetree: Delete this context",
+                "icon": "$(trash)"
+            },
+            {
+                "command": "devicetree.save",
+                "title": "Devicetree: Save configuration",
+                "enablement": "devicetree:dirtyConfig",
+                "icon": "$(save)"
+            },
+            {
+                "command": "devicetree.ctx.setBoard",
+                "title": "Devicetree: Set board...",
+                "enablement": "editorLangId == dts && !editorReadonly || sideBarVisible",
+                "icon": "$(edit)"
             }
         ],
         "languages": [
@@ -50,6 +97,78 @@
                 "language": "dts",
                 "scopeName": "source.dts",
                 "path": "./syntax/dts.tmLanguage.json"
+            }
+        ],
+        "menus": {
+            "editor/title": [
+                {
+                    "command": "devicetree.ctx.addShield",
+                    "when": "editorLangId == dts && !editorReadonly",
+                    "group": "1_run"
+                },
+                {
+                    "command": "devicetree.showOutput",
+                    "when": "editorLangId == dts && !editorReadonly",
+                    "group": "1_run"
+                }
+            ],
+            "view/title": [
+                {
+                    "command": "devicetree.save",
+                    "when": "view == trond-snekvik.devicetree.ctx && devicetree:dirtyConfig",
+                    "group": "navigation"
+                },
+                {
+                    "command": "devicetree.newApp",
+                    "when": "view == trond-snekvik.devicetree.ctx",
+                    "group": "navigation"
+                }
+            ],
+            "view/item/context": [
+                {
+                    "command": "devicetree.ctx.addShield",
+                    "when": "viewItem == devicetree.ctx",
+                    "group": "inline"
+                },
+                {
+                    "command": "devicetree.ctx.rename",
+                    "when": "viewItem == devicetree.ctx"
+                },
+                {
+                    "command": "devicetree.ctx.delete",
+                    "when": "viewItem == devicetree.ctx"
+                },
+                {
+                    "command": "devicetree.showOutput",
+                    "when": "viewItem == devicetree.ctx",
+                    "group": "inline"
+                },
+                {
+                    "command": "devicetree.ctx.setBoard",
+                    "when": "viewItem == devicetree.board",
+                    "group": "inline"
+                },
+                {
+                    "command": "devicetree.ctx.removeShield",
+                    "when": "viewItem == devicetree.shield",
+                    "group": "inline"
+                }
+            ]
+        },
+        "views": {
+            "explorer": [
+                {
+                    "name": "Devicetree",
+                    "visibility": "collapsed",
+                    "id": "trond-snekvik.devicetree.ctx",
+                    "icon": "icons/dark/devicetree-inner.svg"
+                }
+            ]
+        },
+        "viewsWelcome": [
+            {
+                "view": "trond-snekvik.devicetree.ctx",
+                "contents": "Devicetree context view:\n\nWhen you open a Devicetree file, it will show up here, along with information about its board and configuration."
             }
         ],
         "configuration": [
@@ -78,6 +197,10 @@
                     "devicetree.zephyr": {
                         "type": "string",
                         "description": "Path to the Zephyr repo"
+                    },
+                    "devicetree.ctxFile": {
+                        "type": "string",
+                        "description": "File to store contexts in"
                     }
                 }
             }

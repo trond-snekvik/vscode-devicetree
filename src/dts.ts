@@ -1345,6 +1345,25 @@ export class Node {
         return labels;
     }
 
+    /** User readable name for this node */
+    get uniqueName(): string {
+        const labels = this.labels();
+        if (labels.length) {
+            return '&' + labels[0];
+        }
+
+        return this.path;
+    }
+
+    get refName(): string {
+        const labels = this.labels();
+        if (labels.length) {
+            return '&' + labels[0];
+        }
+
+        return `&{${this.path}}`;
+    }
+
     properties(): Property[] {
         const props: Property[] = [];
         this.entries.forEach(e => props.push(...e.properties));
@@ -1416,15 +1435,34 @@ export class Node {
 
 export class DTSCtx {
     overlays: DTSFile[];
-    board: DTSFile;
+    boardFile: DTSFile;
+    board?: zephyr.Board;
+    parsing?: boolean;
     nodes: {[fullPath: string]: Node};
     dirty: vscode.Uri[];
     includes = new Array<string>();
+    _name?: string;
+    id: string;
+    saved=false;
 
     constructor() {
         this.nodes = {};
         this.overlays = [];
         this.dirty = [];
+    }
+
+    get name() {
+        if (this._name) {
+            return this._name;
+        }
+
+        const uri = this.files.pop()?.uri;
+        let folder = path.dirname(uri.fsPath);
+        if (path.basename(folder) === 'boards') {
+            folder = path.dirname(folder);
+        }
+
+        return vscode.workspace.asRelativePath(folder) + ': ' + path.basename(uri.fsPath, path.extname(uri.fsPath));
     }
 
     reset() {
@@ -1447,6 +1485,21 @@ export class DTSCtx {
         return removed;
     }
 
+    async setBoard(board: zephyr.Board) {
+        if (board.arch) {
+            this.includes = zephyr.modules.map(module => module + '/dts/' + board.arch);
+        }
+
+        this.board = board;
+        this.boardFile = new DTSFile(vscode.Uri.file(board.path), this);
+        this.dirty.push(this.boardFile.uri);
+    }
+
+    insertOverlay(uri: vscode.Uri) {
+        this.overlays = [new DTSFile(uri, this), ...this.overlays];
+        this.dirty.push(uri);
+    }
+
     adoptNodes(file: DTSFile) {
         file.entries.forEach(e => {
             if (!(e.node.path in this.nodes)) {
@@ -1456,7 +1509,7 @@ export class DTSCtx {
     }
 
     isValid() {
-        return this.dirty.length === 0 && !this.board?.dirty && !this.overlays.some(overlay => !overlay || overlay.dirty);
+        return this.dirty.length === 0 && !this.boardFile?.dirty && !this.overlays.some(overlay => !overlay || overlay.dirty);
     }
 
     node(name: string, parent?: Node): Node | null {
@@ -1547,8 +1600,8 @@ export class DTSCtx {
     }
 
     get files() {
-        if (this.board) {
-            return [this.board, ...this.overlays];
+        if (this.boardFile) {
+            return [this.boardFile, ...this.overlays];
         }
 
         return this.overlays;
@@ -1556,8 +1609,8 @@ export class DTSCtx {
 
     get macros() {
         const macros = new Array<Macro>();
-        if (this.board) {
-            macros.push(...this.board.macros);
+        if (this.boardFile) {
+            macros.push(...this.boardFile.macros);
         }
         this.overlays.forEach(c => macros.push(...c?.macros));
         return macros;
@@ -1565,8 +1618,8 @@ export class DTSCtx {
 
     get roots() {
         const roots = new Array<NodeEntry>();
-        if (this.board) {
-            roots.push(...this.board.roots);
+        if (this.boardFile) {
+            roots.push(...this.boardFile.roots);
         }
         this.overlays.forEach(c => roots.push(...c?.roots));
         return roots;
@@ -1574,8 +1627,8 @@ export class DTSCtx {
 
     get entries() {
         const entries = new Array<NodeEntry>();
-        if (this.board) {
-            entries.push(...this.board.entries);
+        if (this.boardFile) {
+            entries.push(...this.boardFile.entries);
         }
         this.overlays.forEach(c => entries.push(...c?.entries));
         return entries;
@@ -1590,7 +1643,7 @@ export class DTSCtx {
     }
 
     get fileCount() {
-        return this.overlays.length + (this.board ? 1 : 0);
+        return this.overlays.length + (this.boardFile ? 1 : 0);
     }
 
     toString() {
@@ -1607,6 +1660,10 @@ export class Parser {
     private types: TypeLoader;
     private changeEmitter: vscode.EventEmitter<DTSCtx>;
     onChange: vscode.Event<DTSCtx>;
+    private openEmitter: vscode.EventEmitter<DTSCtx>;
+    onOpen: vscode.Event<DTSCtx>;
+    private deleteEmitter: vscode.EventEmitter<DTSCtx>;
+    onDelete: vscode.Event<DTSCtx>;
     currCtx?: DTSCtx;
 
     constructor(defines: {[name: string]: string}, includes: string[], types: TypeLoader) {
@@ -1618,6 +1675,10 @@ export class Parser {
         this.boardCtx = [];
         this.changeEmitter = new vscode.EventEmitter();
         this.onChange = this.changeEmitter.event;
+        this.openEmitter = new vscode.EventEmitter();
+        this.onOpen = this.openEmitter.event;
+        this.deleteEmitter = new vscode.EventEmitter();
+        this.onDelete = this.deleteEmitter.event;
 
         zephyr.modules().then(modules => {
             modules.forEach(m => {
@@ -1688,63 +1749,105 @@ export class Parser {
         });
     }
 
+    async addContext(board?: vscode.Uri | zephyr.Board, overlays=<vscode.Uri[]>[], name?: string): Promise<DTSCtx> {
+        const ctx = new DTSCtx();
+        let boardDoc: vscode.TextDocument;
+        if (board instanceof vscode.Uri) {
+            ctx.board = { name: path.basename(board.fsPath, path.extname(board.fsPath)), path: board.fsPath, arch: board.fsPath.match(/boards[/\\]([^./\\]+)/)?.[1] };
+            boardDoc = await vscode.workspace.openTextDocument(board).then(doc => doc, _ => undefined);
+        } else if (board) {
+            ctx.board = board;
+            boardDoc = await vscode.workspace.openTextDocument(board.path).then(doc => doc, _ => undefined);
+        } else if (overlays.length) {
+            ctx.board = await this.guessOverlayBoard([...overlays].pop());
+            if (!ctx.board) {
+                return;
+            }
+
+            boardDoc = await vscode.workspace.openTextDocument(ctx.board.path).then(doc => doc, _ => undefined);
+        } else {
+            return;
+        }
+
+        if (!boardDoc) {
+            return;
+        }
+
+        // Board specific includes:
+        if (ctx.board.arch) {
+            // Should this be SOC_DIR based?
+            ctx.includes = zephyr.modules.map(module => module + '/dts/' + ctx.board.arch);
+        }
+
+        ctx.parsing = true;
+        ctx.boardFile = await this.parse(ctx, boardDoc);
+        ctx.parsing = false;
+        ctx.overlays = (await Promise.all(overlays.map(uri => vscode.workspace.openTextDocument(uri).then(doc => this.parse(ctx, doc), () => undefined)))).filter(d => d);
+        if (overlays.length && !ctx.overlays.length) {
+            return;
+        }
+
+        ctx._name = name;
+
+        /* We want to keep the board contexts rid of .dtsi files if we can, as they're not complete.
+         * Remove any .dtsi contexts this board file includes:
+         */
+        if (path.extname(boardDoc.fileName) === '.dts') {
+            this.boardCtx = this.boardCtx.filter(existing => path.extname(existing.boardFile.uri.fsPath) === '.dts' || !ctx.has(existing.boardFile.uri));
+        }
+
+        if (overlays.length) {
+            this.appCtx.push(ctx);
+        } else {
+            this.boardCtx.push(ctx);
+        }
+
+        this.changeEmitter.fire(ctx);
+        return ctx;
+    }
+
+    removeCtx(ctx: DTSCtx) {
+        this.appCtx = this.appCtx.filter(c => c !== ctx);
+        this.boardCtx = this.boardCtx.filter(c => c !== ctx);
+        if (this.currCtx === ctx) {
+            this.currCtx = null;
+        }
+
+        this.deleteEmitter.fire(ctx);
+    }
+
     private async onDidOpen(doc: vscode.TextDocument) {
         if (doc.uri.scheme !== 'file' || doc.languageId !== 'dts') {
             return;
         }
 
-        let ctx = this.ctx(doc.uri);
-        if (ctx) {
-            return ctx;
+        this.currCtx = this.ctx(doc.uri);
+        if (this.currCtx) {
+            return this.currCtx;
         }
 
         if (path.extname(doc.fileName) === '.overlay') {
-            const board = await this.guessOverlayBoard(doc.uri);
-            if (!board) {
-                return;
-            }
-
-            const boardDoc = await vscode.workspace.openTextDocument(board.path).then(doc => doc, _ => undefined);
-            if (!boardDoc) {
-                return;
-            }
-
-            const ctx = new DTSCtx();
-            // Board specific includes:
-            if (board.arch) {
-                // Should this be SOC_DIR based?
-                ctx.includes = await (await zephyr.modules()).map(module => module + '/dts/' + board.arch);
-            }
-
-            ctx.board = await this.parse(ctx, boardDoc);
-            ctx.overlays = [await this.parse(ctx, doc)];
-
-            this.appCtx.push(ctx);
-            this.currCtx = ctx;
-            this.changeEmitter.fire(ctx);
-            return ctx;
+            this.currCtx = await this.addContext(undefined, [doc.uri]);
+        } else {
+            this.currCtx = await this.addContext(doc.uri, []);
         }
 
-        /* This is a raw board context with no overlays. Should be allowed use language features here, but it's not a proper context. */
-        ctx = this.boardCtx.find(ctx => ctx.has(doc.uri));
+        this.openEmitter.fire(this.currCtx);
+        return this.currCtx;
+    }
+
+    async setBoard(board: zephyr.Board, ctx?: DTSCtx) {
+        ctx = ctx ?? this.currCtx;
         if (ctx) {
-            return ctx;
+            return ctx.setBoard(board).then(() => this.reparse(ctx));
         }
+    }
 
-        ctx = new DTSCtx();
-        ctx.board = await this.parse(ctx, doc);
-
-        /* We want to keep the board contexts rid of .dtsi files if we can, as they're not complete.
-         * Remove any .dtsi contexts this board file includes:
-         */
-        if (path.extname(doc.fileName) === '.dts') {
-            this.boardCtx = this.boardCtx.filter(existing => path.extname(existing.board.uri.fsPath) === '.dts' || !ctx.has(existing.board.uri));
+    async insertOverlays(...uris: vscode.Uri[]) {
+        if (this.currCtx) {
+            uris.forEach(uri => this.currCtx.insertOverlay(uri));
+            return this.reparse(this.currCtx);
         }
-
-        this.boardCtx.push(ctx);
-        this.currCtx = ctx;
-        this.changeEmitter.fire(ctx);
-        return ctx;
     }
 
     /** Reparse after a change.
@@ -1757,19 +1860,20 @@ export class Parser {
      * file list makes the context look the same as it did the first time when they're parsed.
      */
     private async reparse(ctx: DTSCtx) {
+        ctx.parsing = true;
         const removed = ctx.reset();
 
         if (removed.board?.dirty) {
-            const doc = await vscode.workspace.openTextDocument(removed.board.uri);
-            ctx.board = await this.parse(ctx, doc);
+            const doc = await vscode.workspace.openTextDocument(removed.board.uri).then(doc => doc, _ => undefined);
+            ctx.boardFile = await this.parse(ctx, doc);
         } else {
             ctx.adoptNodes(removed.board);
-            ctx.board = removed.board;
+            ctx.boardFile = removed.board;
         }
 
         for (const overlay of removed.overlays) {
             if (overlay.dirty) {
-                const doc = await vscode.workspace.openTextDocument(overlay.uri);
+                const doc = await vscode.workspace.openTextDocument(overlay.uri).then(doc => doc, _ => undefined);
                 ctx.overlays.push(await this.parse(ctx, doc));
             } else {
                 ctx.adoptNodes(overlay);
@@ -1777,6 +1881,7 @@ export class Parser {
             }
         }
 
+        ctx.parsing = false;
         this.changeEmitter.fire(ctx);
     }
 
@@ -1788,7 +1893,7 @@ export class Parser {
         // Postpone reparsing of other contexts until they're refocused:
         [...this.appCtx, ...this.boardCtx].filter(ctx => ctx.has(e.document.uri)).forEach(ctx => ctx.dirty.push(e.document.uri)); // TODO: Filter duplicates?
 
-        if (this.currCtx) {
+        if (this.currCtx && !this.currCtx.parsing) {
             this.reparse(this.currCtx);
         }
     }
@@ -1815,6 +1920,17 @@ export class Parser {
         // ctx.subscriptions.push(vscode.workspace.onDidOpenTextDocument(doc => notActive(() => this.onDidOpen(doc))));
         ctx.subscriptions.push(vscode.workspace.onDidChangeTextDocument(doc => this.onDidChange(doc)));
         ctx.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(e => this.onDidChangetextEditor(e)));
+        ctx.subscriptions.push(vscode.workspace.onDidDeleteFiles(e => e.files.forEach(uri => {
+            const remove = this.contexts.filter(ctx =>
+                (ctx.overlays.length === 1 && ctx.overlays[0].uri.toString() === uri.toString()) ||
+                (ctx.boardFile?.uri.toString() === uri.toString()));
+            remove.forEach(ctx => this.removeCtx(ctx));
+
+            this.contexts.filter(ctx => ctx.has(uri)).forEach(ctx => ctx.dirty.push(uri));
+            if (this.currCtx?.dirty.length) {
+                this.reparse(this.currCtx);
+            }
+        })));
         vscode.window.visibleTextEditors.forEach(e => this.onDidOpen(e.document));
     }
 

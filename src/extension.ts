@@ -759,6 +759,25 @@ class DTSEngine implements
         }
     }
 
+    provideTypeDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Location | vscode.Location[] | vscode.LocationLink[]> {
+        const file = this.parser.file(document.uri);
+        if (!file) {
+            return;
+        }
+
+        let [, node] = this.getNodeDefinition(file.ctx, document, position) ?? [undefined, undefined];
+        if (!node) {
+            const entry = file.getEntryAt(position, document.uri);
+            if (entry?.nameLoc.range.contains(position)) {
+                node = entry.node;
+            }
+        }
+
+        if (node?.type?.filename) {
+            return new vscode.Location(vscode.Uri.file(node.type.filename), new vscode.Range(0, 0, 0, 0));
+        }
+    }
+
     provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Hover> {
         const file = this.parser.file(document.uri);
         if (!file) {

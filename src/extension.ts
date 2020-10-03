@@ -348,7 +348,7 @@ class DTSEngine implements
         await Promise.all(json.map(ctx => this.parser.addContext(ctx.board ?? vscode.Uri.file(ctx.boardFile), ctx.overlays.map(o => vscode.Uri.file(o)), ctx.name)));
     }
 
-    async saveCtxs(createFile=true) {
+    async saveCtxs(createFile=false) {
         const file = getConfig('ctxFile') as string;
 
         vscode.commands.executeCommand('setContext', 'devicetree:dirtyConfig', true);
@@ -463,7 +463,7 @@ class DTSEngine implements
             vscode.window.showTextDocument(vscode.Uri.file(file));
         });
 
-        vscode.commands.registerCommand('devicetree.save', () => this.saveCtxs());
+        vscode.commands.registerCommand('devicetree.save', () => this.saveCtxs(true));
 
         vscode.commands.registerCommand('devicetree.ctx.addShield', () => {
             if (this.parser.currCtx && vscode.window.activeTextEditor?.document.languageId === 'dts') {
@@ -477,7 +477,7 @@ class DTSEngine implements
                 vscode.window.showOpenDialog(options).then(uris => {
                     if (uris) {
                         this.parser.insertOverlays(...uris).then(() => {
-                            this.saveCtxs(false);
+                            this.saveCtxs();
                             if (uris.length === 1) {
                                 vscode.window.showInformationMessage(`Added shield overlay ${path.basename(uris[0].fsPath)}.`);
                             } else {
@@ -499,7 +499,7 @@ class DTSEngine implements
                 if (value) {
                     ctx._name = value;
                     this.treeDataChange.fire(ctx);
-                    this.saveCtxs(false);
+                    this.saveCtxs();
                 }
             });
         });
@@ -535,7 +535,7 @@ class DTSEngine implements
             zephyr.selectBoard().then(board => {
                 if (board) {
                     this.parser.setBoard(board, ctx).then(() => {
-                        this.saveCtxs(false);
+                        this.saveCtxs();
                     });
                 }
             });
@@ -1270,7 +1270,7 @@ class DTSEngine implements
                 if (nodeProp) {
                     const md = new vscode.MarkdownString();
                     md.appendText(p.description ?? '');
-                    const loc = nodeProp.loc.uri.fsPath + ':' + (nodeProp.loc.range.start.line + 1);
+                    const loc = nodeProp.loc.uri.path + ':' + (nodeProp.loc.range.start.line + 1);
                     md.appendMarkdown(`\n\n*Already defined at [${path.basename(loc)}](${vscode.Uri.parse('vscode://file/' + loc + ':' + (nodeProp.loc.range.start.character + 1))}):*`);
                     md.appendCodeblock(nodeProp.toString(), 'dts');
                     completion.documentation = md;

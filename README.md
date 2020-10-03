@@ -39,7 +39,7 @@ This extension is an independent community contribution, and is not part of the 
   - Name property matches
   - GPIO pin collisions
 
-![Code completion](https://raw.githubusercontent.com/trond-snekvik/vscode-devicetree/master/doc/completion.png)
+![Code completion](doc/completion.png)
 
 ### Copy C identifiers
 

@@ -877,6 +877,22 @@ class DTSEngine implements
 
             results.push(new vscode.MarkdownString('`' + node.path + '`'));
 
+            // Show pin assignments:
+            if (node.pins?.length && node.type?.['gpio-cells']?.length > 0) {
+                const pins = new vscode.MarkdownString('Pin assigments:\n\n');
+                pins.appendMarkdown('| Pin | Node | Property |\n');
+                pins.appendMarkdown('|-----|------|----------|\n');
+                pins.appendMarkdown(node.pins.map((pin, i) => {
+                    if (!pin) {
+                        return `| ${i} | NC | - |\n`;
+                    }
+
+                    return `| ${i} | [\`${pin.prop.entry.node.uniqueName}\`](vscode://file:${pin.prop.loc.uri.path}:${pin.prop.loc.range.start.line+1}:${pin.prop.loc.range.start.character+1}) | ${pin.prop.name} |\n`;
+                }).join(''));
+                results.push(pins);
+            }
+            results.push(new vscode.MarkdownString().appendCodeblock(node.toString(), 'dts'));
+
             return new vscode.Hover(results, word);
         }
     }

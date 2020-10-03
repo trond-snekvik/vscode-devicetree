@@ -22,7 +22,7 @@
     ],
     "wordPattern": "[&#]?[\\w,@-]+",
     "indentationRules": {
-        "increaseIndentPattern": "^((?!\\/\\/).)*(\\{[^}\"'`]*|\\([^)\"'`]*|\\[[^\\]\"'`]*)$",
-        "decreaseIndentPattern": "^((?!.*?\\/\\*).*\\*/)?\\s*[\\}\\]].*$"
+        "increaseIndentPattern": "{",
+        "decreaseIndentPattern": "}"
     }
 }

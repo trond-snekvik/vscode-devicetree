@@ -636,21 +636,6 @@ class DTSEngine implements
                 vscode.env.clipboard.writeText(macro).then(() => vscode.window.setStatusBarMessage(`Copied "${macro}" to clipboard`, 3000));
             }
         });
-
-        vscode.languages.setLanguageConfiguration('dts',
-            <vscode.LanguageConfiguration>{
-                wordPattern: /&?[#\w@,-]+/,
-                comments: {
-                    blockComment: ['/*', '*/'],
-                    lineComment: '//'
-                },
-                indentationRules: { increaseIndentPattern: /{/, decreaseIndentPattern: /}/ },
-                brackets: [
-                    ['<', '>'],
-                    ['{', '}'],
-                    ['[', ']'],
-                ]
-            });
     }
 
     private setDiags(diags: DiagnosticsSet) {

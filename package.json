@@ -19,7 +19,7 @@
         "url": "https://www.github.com/trond-snekvik/vscode-devicetree",
         "type": "git"
     },
-    "main": "./out/src/extension",
+    "main": "./dist/extension.js",
     "contributes": {
         "commands": [
             {
@@ -220,12 +220,13 @@
         ]
     },
     "scripts": {
-        "vscode:prepublish": "tsc -p ./",
+        "vscode:prepublish": "webpack --mode production",
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
-        "pretest": "npm run compile",
-        "test": "node ./out/src/test/runTest.js",
-        "lint": "eslint -c .eslintrc.js --ext .ts src"
+        "test": "npm run compile && node ./node_modules/vscode/bin/test",
+        "webpack": "webpack --mode development",
+        "webpack-dev": "webpack --mode development --watch",
+        "test-compile": "tsc -p ./"
     },
     "devDependencies": {
         "@types/find": "^0.2.1",
@@ -234,7 +235,6 @@
         "@types/mocha": "^5.2.6",
         "@types/node": "^6.0.40",
         "@types/vscode": "^1.43.0",
-        "@types/yaml": "^1.2.0",
         "@typescript-eslint/eslint-plugin": "^3.9.1",
         "@typescript-eslint/parser": "^3.9.1",
         "eslint": "^7.7.0",
@@ -242,10 +242,12 @@
         "eslint-plugin-import": "^2.22.0",
         "mocha": "^6.1.4",
         "typescript": "^3.7.2",
-        "vscode-test": "1.4.0"
+        "vscode-test": "1.4.0",
+        "ts-loader": "^8.0.0",
+        "webpack": "^4.43.0",
+        "webpack-cli": "^3.3.12"
     },
     "dependencies": {
-        "find": "^0.3.0",
         "glob": "7.1.6",
         "js-yaml": "^3.13.1"
     }

@@ -143,8 +143,8 @@ class DTSDocumentProvider implements vscode.TextDocumentContentProvider {
 
 function iconPath(name: string) {
     return {
-        dark: vscode.Uri.file(__dirname + `/../../icons/dark/${name}.svg`),
-        light: vscode.Uri.file(__dirname + `/../../icons/light/${name}.svg`),
+        dark: __dirname + `/../icons/dark/${name}.svg`,
+        light: __dirname + `/../icons/light/${name}.svg`,
     };
 }
 

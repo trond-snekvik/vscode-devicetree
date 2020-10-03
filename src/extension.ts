@@ -937,7 +937,7 @@ class DTSEngine implements
     resolveCompletionItem?(item: vscode.CompletionItem, token: vscode.CancellationToken): vscode.ProviderResult<vscode.CompletionItem> {
         const n = item['dts-node-type'] as types.NodeType;
         if (n) {
-            const isAbsolutePath = n.name.startsWith('/');
+            const isAbsolutePath = n.name?.startsWith('/');
             const parent = item['dts-parent'] as dts.Node;
             const snippet = new vscode.SnippetString();
             if (isAbsolutePath) {
@@ -956,7 +956,7 @@ class DTSEngine implements
 
             snippet.appendText(` {\n`);
 
-            if (!isAbsolutePath) {
+            if (!isAbsolutePath && n.name) { // nodes with no name are child nodes, and don't need compatible properties
                 snippet.appendText(`\tcompatible = "${n.name}";\n`);
             }
 
@@ -1067,7 +1067,8 @@ class DTSEngine implements
         if (!file) {
             return;
         }
-        const node = file.ctx.getNodeAt(position, document.uri);
+        const entry = file.ctx.getEntryAt(position, document.uri);
+        const node = entry.node;
 
         const lineRange = new vscode.Range(position.line, 0, position.line, 999999);
         const line = document.getText(lineRange);
@@ -1307,7 +1308,9 @@ class DTSEngine implements
             let name: string;
             // Find a reasonable name
             const parts = n.name?.split(',');
-            if (n.name.match(/^\/[\w-,]+\/$/)) {
+            if (!n.name) {
+                name = 'node';
+            } else if (n.name.match(/^\/[\w-,]+\/$/)) {
                 // absolute paths, e.g. /chosen/ should be stripped of their slashes
                 name = n.name.replace(/\//g, '');
             } else if (parts.length > 1) {
@@ -1327,7 +1330,7 @@ class DTSEngine implements
             return completion;
         }).filter(n => n);
 
-        const childCompletions = node.children().map(n => {
+        const childCompletions = node.children().filter(n => !entry.children.find(child => child.node === n)).map(n => {
             const item = new vscode.CompletionItem(n.fullName, vscode.CompletionItemKind.Module);
             item.insertText = new vscode.SnippetString(n.fullName + ' {\n\t');
             item.insertText.appendTabstop();

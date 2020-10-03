@@ -1270,8 +1270,7 @@ class DTSEngine implements
                 if (nodeProp) {
                     const md = new vscode.MarkdownString();
                     md.appendText(p.description ?? '');
-                    const loc = nodeProp.loc.uri.path + ':' + (nodeProp.loc.range.start.line + 1);
-                    md.appendMarkdown(`\n\n*Already defined at [${path.basename(loc)}](${vscode.Uri.parse('vscode://file/' + loc + ':' + (nodeProp.loc.range.start.character + 1))}):*`);
+                    md.appendMarkdown(`\n\n*Already defined as:*`);
                     md.appendCodeblock(nodeProp.toString(), 'dts');
                     completion.documentation = md;
                     // Not quite at the top:

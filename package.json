@@ -12,7 +12,7 @@
         "Other"
     ],
     "activationEvents": [
-        "*"
+        "onLanguage:dts"
     ],
     "icon": "doc/devicetree_icon.png",
     "repository": {

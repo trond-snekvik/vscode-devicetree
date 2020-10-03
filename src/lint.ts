@@ -3,7 +3,7 @@ import { getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, String
 import * as types from './types';
 import { DiagnosticsSet } from './diags';
 
-export type LintCtx = { ctx: DTSCtx, types: types.TypeLoader, diags: DiagnosticsSet };
+export type LintCtx = { ctx: DTSCtx, types: types.TypeLoader, diags: DiagnosticsSet, gpioControllers: Node[] };
 
 function countText(count: number, text: string, plural?: string): string {
     if (!plural) {
@@ -415,6 +415,46 @@ function lintNode(node: Node, ctx: LintCtx) {
     if (!node.type) {
         node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Unknown node type`));
         return; // !!! The rest of the block depends on the type being resolved
+    }
+
+    // Check overlapping and out-of-bounds GPIO pin assignments
+    if (node.property('gpio-controller') && (node.type['gpio-cells'] as string[])?.includes('pin')) {
+        const firstPin = ctx.gpioControllers.reduce((sum, n) => sum += n.property('ngpios')?.number ?? 32, 0);
+        const maxPins = node.property('ngpios')?.number ?? 32;
+        const pinIdx = (node.type['gpio-cells'] as string[]).indexOf('pin');
+        const refs = new Array<{ prop: Property, target?: PHandle, cells: IntValue[] }>();
+        ctx.ctx.nodeArray().filter(n => n.enabled()).forEach(n => {
+            n.properties().forEach(p => {
+                if (p.name.endsWith('-pin') && p.number !== undefined) {
+                    refs.push({cells: (p.value[0] as ArrayValue).val as IntValue[], prop: p});
+                } else {
+                    refs.push(...p.entries?.filter(entry => entry.target.is(node)).map(entry => ({ prop: p, ...entry })) ?? []);
+                }
+            });
+        });
+
+        node.pins = new Array(maxPins).fill(undefined);
+        refs.forEach(ref => {
+            const pin = ref.cells[pinIdx];
+            if (!pin) {
+                return;
+            }
+
+            if (!ref.target) { // raw pin reference, e.g. sck-pin = < 5 >;
+                if (pin.val - firstPin >= firstPin && pin.val - firstPin < firstPin + maxPins) {
+                    node.pins[pin.val - firstPin] = ref;
+                }
+            } else if (pin.val >= maxPins) {
+                ctx.diags.pushLoc(pin.loc, `Pin ${pin.val} does not exist on ${ref.target?.val ?? node.uniqueName}: Only has ${maxPins} pins.`);
+            } else if (node.pins[pin.val]) {
+                const diag = ctx.diags.pushLoc(pin.loc, `Pin ${pin.val} of ${ref.target?.val ?? node.uniqueName} already assigned to ${node.pins[pin.val].prop.entry.node.path}${node.pins[pin.val].prop.name}`, vscode.DiagnosticSeverity.Information);
+                diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(node.pins[pin.val].prop.loc, "Overlapping assignment")];
+            } else {
+                node.pins[pin.val] = ref;
+            }
+        });
+
+        ctx.gpioControllers.push(node);
     }
 
     if (node.parent?.type?.['bus']) {

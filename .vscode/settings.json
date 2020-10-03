@@ -6,6 +6,9 @@
     "search.exclude": {
         "out": true // set this to false to include "out" folder in search results
     },
+    "editor.codeActionsOnSave": {
+        "source.fixAll.eslint": true
+    },
     "eslint.format.enable": true,
     "eslint.lintTask.enable": true,
 }

@@ -1,6 +1,6 @@
-# Devicetree for the Zephyr Project
+# DeviceTree for the Zephyr Project
 
-Devicetree language support for the [Zephyr project](https://zephyrproject.org/) in VS Code.
+DeviceTree language support for the [Zephyr project](https://zephyrproject.org/) in VS Code.
 
 This extension is an independent community contribution, and is not part of the Zephyr Project.
 
@@ -22,10 +22,10 @@ This extension is an independent community contribution, and is not part of the 
 - Show references
 - Breadcrumbs navigation
 - Workspace symbols
-- Preview compiled Devicetree output
+- Preview compiled DeviceTree output
 - Copy C identifier to clipboard
 - Show GPIO pin assignments
-- Manage Devicetree contexts
+- Manage DeviceTree contexts
 - Format selection
 - Linting language rules
   - Redundant properties
@@ -44,7 +44,7 @@ This extension is an independent community contribution, and is not part of the 
 
 ### Copy C identifiers
 
-While selecting a node, property or value in a Devicetree file, right click and select "Devicetree: Copy C identifier to clipboard" to copy the matching C identifier.
+While selecting a node, property or value in a DeviceTree file, right click and select "DeviceTree: Copy C identifier to clipboard" to copy the matching C identifier.
 
 ![Copy identifier](doc/copy.png)
 
@@ -52,17 +52,17 @@ If the selected symbol has a corresponding C macro, like `DT_PROP(DT_NODELABEL(a
 
 ![Copied identifier](doc/copied.png)
 
-### Manage Devicetree contexts
+### Manage DeviceTree contexts
 
-If you work with more than one application or board, you'll have multiple sets of Devicetree contexts - one for each of your builds. Every time you open a new Devicetree file, the extension will add a Devicetree context (unless this file is already part of an existing context). Each context corresponds to a single compiled Devicetree file that goes into a build, and consists of a board file and a list of overlay files.
+If you work with more than one application or board, you'll have multiple sets of DeviceTree contexts - one for each of your builds. Every time you open a new DeviceTree file, the extension will add a DeviceTree context (unless this file is already part of an existing context). Each context corresponds to a single compiled DeviceTree file that goes into a build, and consists of a board file and a list of overlay files.
 
-The Devicetree contexts show up in the explorer sidebar:
+The DeviceTree contexts show up in the explorer sidebar:
 
-![Devicetree Contexts](doc/contexts.png)
+![DeviceTree Contexts](doc/contexts.png)
 
-The Devicetree contexts can be saved in a context file by pressing the Save button on the Devicetree context explorer. This allows you to restore the contexts the next time you open the folder. The location of the context file can be changed by setting the "devicetree.ctxFile" configuration entry in the VS Code settings.
+The DeviceTree contexts can be saved in a context file by pressing the Save button on the DeviceTree context explorer. This allows you to restore the contexts the next time you open the folder. The location of the context file can be changed by setting the "devicetree.ctxFile" configuration entry in the VS Code settings.
 
-It's possible to add shield files to the same context by pressing "Devicetree: Add Shield..." on the context in the Devicetree context explorer. Shield files will be processed ahead of the overlay file.
+It's possible to add shield files to the same context by pressing "DeviceTree: Add Shield..." on the context in the DeviceTree context explorer. Shield files will be processed ahead of the overlay file.
 
 ## Installation
 

@@ -1,7 +1,7 @@
 {
     "name": "devicetree",
-    "displayName": "Devicetree for the Zephyr Project",
-    "description": "Full Devicetree language support for the Zephyr project",
+    "displayName": "DeviceTree for the Zephyr Project",
+    "description": "Full DeviceTree language support for the Zephyr project",
     "version": "2.0.0",
     "publisher": "trond-snekvik",
     "author": {
@@ -30,18 +30,18 @@
         "commands": [
             {
                 "command": "devicetree.showOutput",
-                "title": "Devicetree: Show compiled output",
+                "title": "DeviceTree: Show compiled output",
                 "enablement": "editorLangId == dts && !editorReadonly || sideBarVisible",
                 "icon": "$(open-preview)"
             },
             {
                 "command": "devicetree.newApp",
-                "title": "Devicetree: New Application",
+                "title": "DeviceTree: New Application",
                 "icon": "$(plus)"
             },
             {
                 "command": "devicetree.ctx.addShield",
-                "title": "Devicetree: Add shield...",
+                "title": "DeviceTree: Add shield...",
                 "enablement": "editorLangId == dts && !editorReadonly || sideBarVisible",
                 "icon": {
                     "dark": "icons/dark/add-shield.svg",
@@ -50,7 +50,7 @@
             },
             {
                 "command": "devicetree.ctx.removeShield",
-                "title": "Devicetree: Remove shield",
+                "title": "DeviceTree: Remove shield",
                 "enablement": "editorLangId == dts && !editorReadonly || sideBarVisible",
                 "icon": {
                     "dark": "icons/dark/remove-shield.svg",
@@ -59,30 +59,30 @@
             },
             {
                 "command": "devicetree.ctx.rename",
-                "title": "Devicetree: Rename context",
+                "title": "DeviceTree: Rename context",
                 "enablement": "editorLangId == dts && !editorReadonly || sideBarVisible",
                 "icon": "$(edit)"
             },
             {
                 "command": "devicetree.ctx.delete",
-                "title": "Devicetree: Delete this context",
+                "title": "DeviceTree: Delete this context",
                 "icon": "$(trash)"
             },
             {
                 "command": "devicetree.save",
-                "title": "Devicetree: Save configuration",
+                "title": "DeviceTree: Save configuration",
                 "enablement": "devicetree:dirtyConfig",
                 "icon": "$(save)"
             },
             {
                 "command": "devicetree.ctx.setBoard",
-                "title": "Devicetree: Set board...",
+                "title": "DeviceTree: Set board...",
                 "enablement": "editorLangId == dts && !editorReadonly || sideBarVisible",
                 "icon": "$(edit)"
             },
             {
                 "command": "devicetree.getMacro",
-                "title": "Devicetree: Copy C identifier to clipboard",
+                "title": "DeviceTree: Copy C identifier to clipboard",
                 "enablement": "editorLangId == dts && resourceScheme == file",
                 "icon": "$(edit)"
             }
@@ -91,7 +91,7 @@
             {
                 "id": "dts",
                 "aliases": [
-                    "Devicetree"
+                    "DeviceTree"
                 ],
                 "configuration": "syntax/devicetree-language.json",
                 "extensions": [
@@ -177,7 +177,7 @@
         "views": {
             "explorer": [
                 {
-                    "name": "Devicetree",
+                    "name": "DeviceTree",
                     "visibility": "collapsed",
                     "id": "trond-snekvik.devicetree.ctx",
                     "icon": "icons/dark/devicetree-inner.svg"
@@ -187,7 +187,7 @@
         "viewsWelcome": [
             {
                 "view": "trond-snekvik.devicetree.ctx",
-                "contents": "Devicetree context view:\n\nWhen you open a Devicetree file, it will show up here, along with information about its board and configuration."
+                "contents": "DeviceTree context view:\n\nWhen you open a DeviceTree file, it will show up here, along with information about its board and configuration."
             }
         ],
         "configuration": [

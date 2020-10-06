@@ -234,7 +234,7 @@ class DTSEngine implements
             const item = new vscode.TreeItem(element.name,
                 this.parser.currCtx === element ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
             item.contextValue = 'devicetree.ctx';
-            item.tooltip = 'Devicetree Context';
+            item.tooltip = 'DeviceTree Context';
             item.id = ['devicetree', 'ctx', element.name, file.uri.fsPath.replace(/[/\\]/g, '.')].join('.');
             item.iconPath = iconPath('devicetree-inner');
             return item;
@@ -472,7 +472,7 @@ class DTSEngine implements
                     openLabel: 'Add shield file',
                     canSelectMany: true,
                     defaultUri: vscode.Uri.file(path.resolve(zephyr.zephyrRoot, 'boards', 'shields')),
-                    filters: { 'Devicetree': ['dts', 'dtsi', 'overlay'] },
+                    filters: { 'DeviceTree': ['dts', 'dtsi', 'overlay'] },
                 };
                 vscode.window.showOpenDialog(options).then(uris => {
                     if (uris) {
@@ -495,7 +495,7 @@ class DTSEngine implements
                 return;
             }
 
-            vscode.window.showInputBox({ prompt: 'New Devicetree context name', value: ctx.name }).then(value => {
+            vscode.window.showInputBox({ prompt: 'New DeviceTree context name', value: ctx.name }).then(value => {
                 if (value) {
                     ctx._name = value;
                     this.treeDataChange.fire(ctx);

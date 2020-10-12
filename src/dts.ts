@@ -155,6 +155,12 @@ export class ArrayValue extends PropertyValue {
                 continue;
             }
 
+            const unbracedExpression = state.match(/^([+|!^-]|&&|<<|>>|==)/);
+            if (unbracedExpression) {
+                state.pushDiag(`Expression without a surrounding parenthesis`, vscode.DiagnosticSeverity.Error);
+                continue;
+            }
+
             // Unexpected data: Keep going until a potential closing bracket or semicolon
             const startOfError = state.freeze();
             state.skipToken();

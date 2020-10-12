@@ -1073,7 +1073,7 @@ class DTSEngine implements
             return;
         }
         const entry = file.ctx.getEntryAt(position, document.uri);
-        const node = entry.node;
+        const node = entry?.node;
 
         const lineRange = new vscode.Range(position.line, 0, position.line, 999999);
         const line = document.getText(lineRange);

@@ -48,6 +48,10 @@ function lintNode(node: Node, ctx: LintCtx) {
                     }
                 });
             }
+
+            if (node.address === undefined) {
+                node.entries.forEach(e => ctx.diags.pushLoc(e.nameLoc, `Nodes with reg properties must have a unit address.`));
+            }
         } else if (prop.name === 'compatible') {
             const nonStrings = prop.value.filter(v => !(v instanceof StringValue));
             if (nonStrings.length > 0) {
@@ -377,6 +381,15 @@ function lintNode(node: Node, ctx: LintCtx) {
         if (node.path !== '/cpus/') {
             node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Node cpus must be directly under the root node`, vscode.DiagnosticSeverity.Error));
         }
+    }
+
+    if (node.address !== undefined && !node.property('reg') && !node.property('ranges')) {
+        node.entries.filter(e => !e.ref).forEach(e => {
+            ctx.diags.pushLoc(e.nameLoc, `If the node has no reg or ranges property, the @unit-address must be omitted`);
+            const action = ctx.diags.pushAction(new vscode.CodeAction(`Remove unit address`, vscode.CodeActionKind.QuickFix));
+            action.edit = new vscode.WorkspaceEdit();
+            action.edit.replace(e.nameLoc.uri, e.nameLoc.range, node.name);
+        });
     }
 
     // Check overlapping ranges

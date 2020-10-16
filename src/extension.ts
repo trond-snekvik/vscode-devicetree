@@ -877,7 +877,7 @@ class DTSEngine implements
                         return `| ${i} | NC | - |\n`;
                     }
 
-                    return `| ${i} | [\`${pin.prop.entry.node.uniqueName}\`](vscode://file:${pin.prop.loc.uri.path}:${pin.prop.loc.range.start.line+1}:${pin.prop.loc.range.start.character+1}) | ${pin.prop.name} |\n`;
+                    return `| ${i} | \`${pin.prop.entry.node.uniqueName}\` | ${pin.prop.name} |\n`;
                 }).join(''));
                 results.push(pins);
             }

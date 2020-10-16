@@ -161,6 +161,8 @@
                         {"include": "#node-contents"}
                     ]
                 },
+                {"include": "#preprocessor-include"},
+                {"include": "#preprocessor-define"},
                 {"include": "#properties"},
                 {"include": "#node"},
                 {"include": "#block-comment"},
@@ -190,6 +192,8 @@
         },
         "node-contents": {
             "patterns":[
+                {"include": "#preprocessor-include"},
+                {"include": "#preprocessor-define"},
                 {"include": "#comment"},
                 {"include": "#block-comment"},
                 {"include": "#compiler-directive"},

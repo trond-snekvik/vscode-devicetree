@@ -18,7 +18,9 @@
         "Linters"
     ],
     "activationEvents": [
-        "onLanguage:dts"
+        "onLanguage:dts",
+        "onCommand:devicetree.newApp",
+        "onCommand:devicetree.save"
     ],
     "icon": "doc/devicetree_icon.png",
     "repository": {

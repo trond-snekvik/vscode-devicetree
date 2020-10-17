@@ -897,6 +897,68 @@ class DTSEngine implements
                 vscode.env.clipboard.writeText(macro).then(() => vscode.window.setStatusBarMessage(`Copied "${macro}" to clipboard`, 3000));
             }
         });
+
+        vscode.commands.registerCommand('devicetree.edit', async () => {
+            const ctx = this.parser.currCtx;
+            const selection = vscode.window.activeTextEditor?.selection;
+            const uri = vscode.window.activeTextEditor?.document.uri;
+            if (!ctx || !selection || !uri) {
+                return;
+            }
+
+            if (!ctx.overlays.length) {
+                vscode.window.showErrorMessage('No overlayfile');
+                return;
+            }
+
+            const overlay = [...ctx.overlays].pop();
+            const doc = await vscode.workspace.openTextDocument(overlay.uri);
+
+            if (uri.toString() === doc.uri.toString()) {
+                return; // already in this file
+            }
+
+            const editNode = (node: dts.Node, insertText='') => {
+                const edit = new vscode.WorkspaceEdit();
+
+                let text = insertText;
+                let it = node;
+                let lineOffset = 0;
+                let charOffset = insertText.length;
+                while (it) {
+                    const shortName = (it.labels().length && it.refName) || (!it.parent && '/');
+                    text = (shortName || it.fullName) + ' {\n\t' + text.split('\n').join('\n\t') + '\n};';
+                    lineOffset += 1;
+                    charOffset += 1;
+
+                    if (shortName) {
+                        break;
+                    }
+
+                    it = it.parent;
+                }
+                const insert = new vscode.Position(doc.lineCount, 0);
+
+                edit.insert(doc.uri, insert, '\n' + text + '\n');
+
+                vscode.workspace.applyEdit(edit);
+                vscode.window.showTextDocument(doc).then(e => {
+                    e.revealRange(new vscode.Range(insert, insert), vscode.TextEditorRevealType.Default);
+                    const cursor = new vscode.Position(insert.line + lineOffset, charOffset);
+                    e.selection = new vscode.Selection(cursor, cursor);
+                });
+            };
+
+            const prop = ctx.getPropertyAt(selection.start, uri);
+            if (prop) {
+                editNode(prop.entry.node, prop.name + ' = ');
+            } else {
+                const entry = ctx.getEntryAt(selection.start, uri);
+                if (entry?.nameLoc.range.contains(selection.start)) {
+                    editNode(entry.node);
+                }
+            }
+        });
     }
 
     private setDiags(diags: DiagnosticsSet) {

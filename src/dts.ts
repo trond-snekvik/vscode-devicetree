@@ -832,6 +832,10 @@ export class Property {
         if (this.value.length === 1 && (this.value[0] instanceof ArrayValue) && this.value[0].val.every(v => v instanceof PHandle)) {
             return this.value[0].val as PHandle[];
         }
+
+        if (this.value.every(v => v instanceof PHandle)) {
+            return this.value as PHandle[];
+        }
     }
 
     get pHandleArray() {
@@ -1602,7 +1606,7 @@ export class DTSCtx {
         const refs = new Array<PHandle>();
 
         this.properties.forEach(p => {
-            refs.push(...(<PHandle[]>p.pHandleArray?.flatMap(v => v.val.filter(v => v instanceof PHandle && v.is(node))) ?? []));
+            refs.push(...(<PHandle[]>p.pHandleArray?.flatMap(v => v.val.filter(v => v instanceof PHandle && v.is(node))) ?? p.pHandles ?? []));
         });
 
         return refs;

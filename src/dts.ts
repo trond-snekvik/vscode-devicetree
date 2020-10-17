@@ -899,8 +899,8 @@ export class Property {
 
         const entries = new Array<{ addrs: IntValue[], sizes: IntValue[] }>();
 
-        const addrCells = this.entry.parent?.node.addrCells() ?? 2;
-        const sizeCells = this.entry.parent?.node.sizeCells() ?? 1;
+        const addrCells = this.entry.node.parent?.addrCells() ?? 2;
+        const sizeCells = this.entry.node.parent?.sizeCells() ?? 1;
 
         val.forEach(v => {
             for (let i = 0; i + addrCells + sizeCells <= v.val.length; i += sizeCells) {

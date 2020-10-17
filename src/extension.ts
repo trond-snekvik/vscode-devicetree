@@ -306,7 +306,7 @@ class DTSEngine implements
             item.description = element.description;
             item.id = ['devicetree', 'ctx', element.ctx.name, 'item', element.id].join('.');
             if (element.icon) {
-                // item.iconPath = element.icon.startsWith('$') ? element.icon : iconPath(element.icon);
+                item.iconPath = iconPath(element.icon);
             }
 
             if (element.tooltip) {
@@ -344,22 +344,19 @@ class DTSEngine implements
         if (element instanceof dts.DTSCtx) {
             const details = new TreeInfoItem(element, 'Overview');
             const nodes = element.nodeArray();
-            details.icon = '$(checklist)';
-
-            const gpio = new TreeInfoItem(element, 'GPIO');
+            const gpio = new TreeInfoItem(element, 'GPIO', 'gpio');
             nodes.filter(n => n.pins).forEach((n, _, all) => {
                 const controller = new TreeInfoItem(element, n.uniqueName);
                 n.pins.forEach((p, i) => {
                     if (p) {
                         const pin = new TreeInfoItem(element, `Pin ${i.toString()}`);
-                        pin.icon = '$(symbol-interface)';
                         pin.loc = p.prop.loc;
-                        pin.description = `${p.prop.entry.node.uniqueName} - ${p.prop.name}`;
+                        pin.tooltip = p.prop.entry.node.path + p.prop.name;
+                        pin.description = `${p.prop.entry.node.uniqueName} • ${p.prop.name}`;
                         controller.addChild(pin);
                     }
                 });
 
-                controller.icon = 'devicetree-inner';
                 controller.loc = n.entries[0]?.loc;
                 controller.description = n.pins.length + ' pins';
                 if (!controller.children.length) {
@@ -373,9 +370,7 @@ class DTSEngine implements
                 details.addChild(gpio);
             }
 
-            const flash = new TreeInfoItem(element, 'Flash');
-            flash.icon = '$(server)';
-
+            const flash = new TreeInfoItem(element, 'Flash', 'flash');
             const sizeString = size => {
                 const spec = [
                     {size: 1024 * 1024, name: 'MB'},
@@ -422,10 +417,17 @@ class DTSEngine implements
                     if (start < offset) {
                         partition.description += ` - ${sizeString(offset - start)} overlap!`;
                     }
-                    partition.tooltip = `0x${start.toString(16)}`;
+                    partition.tooltip = `0x${start.toString(16)} - 0x${(start + size - 1).toString(16)}`;
                     partition.loc = c.entries[0]?.loc;
-                    partition.addChild(new TreeInfoItem(element, 'Start', undefined, reg[0].addrs[0].toString(true)));
-                    partition.addChild(new TreeInfoItem(element, 'Size', undefined, reg[0].sizes[0].toString(true)));
+
+                    const startItem = new TreeInfoItem(element, 'Start', undefined, reg[0].addrs[0].toString(true));
+                    startItem.loc = reg[0].addrs[0].loc;
+                    partition.addChild(startItem);
+
+                    const sizeItem = new TreeInfoItem(element, 'Size', undefined, reg[0].sizes[0].toString(true));
+                    sizeItem.loc = reg[0].sizes[0].loc;
+                    partition.addChild(sizeItem);
+
                     parent.addChild(partition);
                     offset = start + size;
                 });
@@ -439,7 +441,7 @@ class DTSEngine implements
                 details.addChild(flash);
             }
 
-            const interrupts = new TreeInfoItem(element, 'Interrupts');
+            const interrupts = new TreeInfoItem(element, 'Interrupts', 'interrupts');
             const controllers = nodes.filter(n => n.property('interrupt-controller'));
             const controllerItems = controllers.map(n => ({item: new TreeInfoItem(element, n.uniqueName), children: new Array<{node: dts.Node, interrupts: dts.Property}>()}));
             nodes.filter(n => n.property('interrupts')).forEach(n => {
@@ -467,6 +469,7 @@ class DTSEngine implements
                 controller.children.sort((a, b) => a.interrupts.array[0] - b.interrupts.array[0]).forEach(child => {
                     const irq = new TreeInfoItem(element, child.node.uniqueName);
                     irq.loc = child.node.entries[0]?.nameLoc;
+                    irq.tooltip = child.node.path;
 
                     const cellValues = child.interrupts.array;
                     const prioIdx = cells.indexOf('priority');
@@ -483,8 +486,10 @@ class DTSEngine implements
                 if (controllers.length > 1) {
                     interrupts.addChild(controller.item);
                 } else {
+                    // Skip second depth if there's just one interrupt controller
                     controller.item.description = controller.item.name;
-                    controller.item.name = 'Interrupts';
+                    controller.item.name = interrupts.name;
+                    controller.item.icon = interrupts.icon;
                     details.addChild(controller.item);
                 }
             });
@@ -493,7 +498,7 @@ class DTSEngine implements
                 details.addChild(interrupts);
             }
 
-            const buses = new TreeInfoItem(element, 'Buses');
+            const buses = new TreeInfoItem(element, 'Buses', 'bus');
             nodes.filter(node => node.type?.bus).forEach(node => {
                 const bus = new TreeInfoItem(element, node.uniqueName);
                 if (!bus.name.toLowerCase().includes(node.type.bus.toLowerCase())) {
@@ -501,9 +506,11 @@ class DTSEngine implements
                 }
 
                 bus.loc = node.entries[0]?.loc;
+                bus.tooltip = node.path;
                 node.children().forEach(child => {
                     const busEntry = new TreeInfoItem(element, child.uniqueName);
                     busEntry.loc = child.entries[0]?.loc;
+                    busEntry.tooltip = child.path;
                     if (child.address !== undefined) {
                         busEntry.description = `@ 0x${child.address.toString(16)}`;
                     }
@@ -512,7 +519,7 @@ class DTSEngine implements
                 });
 
                 if (!bus.children.length) {
-                    bus.description = (bus.description ?? '') + ' - Nothing connected';
+                    bus.description = (bus.description ? bus.description + ' ' : '') + '• Nothing connected';
                 }
 
                 buses.addChild(bus);

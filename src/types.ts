@@ -446,6 +446,9 @@ export class TypeLoader {
                 }
 
                 type.properties = mergeProperties(type.properties, includeType.properties);
+                if (!type.bus) {
+                    type.bus = includeType.bus;
+                }
                 // load all included tree entries that aren't in the child:
                 const entries = Object.keys(includeType).filter(e => e !== 'properties' && !(e in type));
                 entries.forEach(e => type[e] = includeType[e]);

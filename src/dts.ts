@@ -1699,6 +1699,8 @@ export class Parser {
     private deleteEmitter: vscode.EventEmitter<DTSCtx>;
     onDelete: vscode.Event<DTSCtx>;
     currCtx?: DTSCtx;
+    private isStable = true;
+    private waiters = new Array<() => void>();
 
     constructor(defines: {[name: string]: string}, includes: string[], types: TypeLoader) {
         this.includes = includes;
@@ -1737,6 +1739,14 @@ export class Parser {
         }
 
         return this.contexts.find(ctx => ctx.has(uri));
+    }
+
+    async stable(): Promise<void> {
+        if (this.isStable) {
+            return;
+        }
+
+        return new Promise(resolve => this.waiters.push(resolve));
     }
 
     get contexts() {
@@ -1893,6 +1903,7 @@ export class Parser {
      */
     private async reparse(ctx: DTSCtx) {
         ctx.parsing = true;
+        this.isStable = false;
         const removed = ctx.reset();
 
         if (removed.board?.dirty) {
@@ -1914,6 +1925,11 @@ export class Parser {
         }
 
         ctx.parsing = false;
+        this.isStable = true;
+        while (this.waiters.length) {
+            this.waiters.pop()();
+        }
+
         this.changeEmitter.fire(ctx);
     }
 

@@ -345,10 +345,18 @@ class DTSEngine implements
 
         const text = await new Promise<string>(resolve => readFile(file, 'utf-8', (_, data) => resolve(data))) ?? '';
         const json: StoredCtx[] = JSON.parse(text) || [];
-        await Promise.all(json.map(ctx => this.parser.addContext(ctx.board ?? vscode.Uri.file(ctx.boardFile), ctx.overlays.map(o => vscode.Uri.file(o)), ctx.name)));
+        const ctxNames = [...this.parser.contexts.map(ctx => ctx.name)];
+
+        await Promise.all(json.map(ctx => {
+            if (!ctxNames.includes(ctx.name)) {
+                ctxNames.push(ctx.name); // don't load duplicates
+                return this.parser.addContext(ctx.board ?? vscode.Uri.file(ctx.boardFile), ctx.overlays.map(o => vscode.Uri.file(o)), ctx.name);
+            }
+        }));
     }
 
     async saveCtxs(createFile=false) {
+        await this.parser.stable();
         const file = getConfig('ctxFile') as string;
 
         vscode.commands.executeCommand('setContext', 'devicetree:dirtyConfig', true);
@@ -1067,7 +1075,8 @@ class DTSEngine implements
         return item;
     }
 
-    provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.CompletionContext): vscode.ProviderResult<vscode.CompletionItem[] | vscode.CompletionList> {
+    async provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.CompletionContext): Promise<vscode.CompletionItem[] | vscode.CompletionList> {
+        await this.parser.stable();
         const file = this.parser.file(document.uri);
         if (!file) {
             return;

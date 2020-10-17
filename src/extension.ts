@@ -1147,8 +1147,10 @@ class DTSEngine implements
                     }
                 });
                 item.insertText.appendText(')');
+                item.detail = 'Macro';
             } else {
                 item.kind = vscode.CompletionItemKind.Constant;
+                item.detail = 'Define';
             }
 
             if (item.label.startsWith('_')) { // Reserved macros go last

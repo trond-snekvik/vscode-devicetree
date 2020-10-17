@@ -84,9 +84,9 @@
             },
             {
                 "command": "devicetree.getMacro",
-                "title": "DeviceTree: Copy C identifier to clipboard",
+                "title": "DeviceTree: Copy C identifier",
                 "enablement": "editorLangId == dts && resourceScheme == file",
-                "icon": "$(edit)"
+                "icon": "$(clippy)"
             },
             {
                 "command": "devicetree.edit",

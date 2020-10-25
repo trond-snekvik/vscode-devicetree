@@ -436,10 +436,10 @@ function lintNode(node: Node, ctx: LintCtx) {
     }
 
     // Check overlapping and out-of-bounds GPIO pin assignments
-    if (node.property('gpio-controller') && (node.type['gpio-cells'] as string[])?.includes('pin')) {
+    const pinIdx = node.type.cells('gpio')?.indexOf('pin') ?? -1;
+    if (node.property('gpio-controller') && pinIdx >= 0) {
         const firstPin = ctx.gpioControllers.reduce((sum, n) => sum += n.property('ngpios')?.number ?? 32, 0);
         const maxPins = node.property('ngpios')?.number ?? 32;
-        const pinIdx = (node.type['gpio-cells'] as string[]).indexOf('pin');
         const refs = new Array<{ prop: Property, target?: PHandle, cells: IntValue[] }>();
         ctx.ctx.nodeArray().filter(n => n.enabled()).forEach(n => {
             n.properties().forEach(p => {
@@ -475,17 +475,17 @@ function lintNode(node: Node, ctx: LintCtx) {
         ctx.gpioControllers.push(node);
     }
 
-    if (node.parent?.type?.['bus']) {
-        if (!node.type?.['on-bus']) {
-            node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Only ${node.parent.type['bus']} nodes accepted in ${node.parent.path}.`, vscode.DiagnosticSeverity.Error));
-        } else if (node.type['on-bus'] !== node.parent?.type?.['bus']) {
-            node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Node should only occur on the ${node.type['on-bus']} bus.`, vscode.DiagnosticSeverity.Error));
+    if (node.parent?.type?.bus) {
+        if (!node.type?.onBus) {
+            node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Only ${node.parent.type.bus} nodes accepted in ${node.parent.path}.`, vscode.DiagnosticSeverity.Error));
+        } else if (node.type.onBus !== node.parent?.type?.bus) {
+            node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Node should only occur on the ${node.type.onBus} bus.`, vscode.DiagnosticSeverity.Error));
         }
-    } else if (node.type?.['on-bus']) {
-        node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Node should only occur on the ${node.type['on-bus']} bus.`, vscode.DiagnosticSeverity.Error));
+    } else if (node.type?.onBus) {
+        node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Node should only occur on the ${node.type.onBus} bus.`, vscode.DiagnosticSeverity.Error));
     }
 
-    if (node.parent && node.type["on-bus"] === 'spi') {
+    if (node.parent && node.type.onBus === 'spi') {
         const reg = node.property('reg')?.number;
         const cs = node.parent.property('cs-gpios');
         if (reg === undefined) {
@@ -617,7 +617,7 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
         }
 
         // Per-property type check:
-        const propType = node.type?.properties.find(p => p.name === prop.name);
+        const propType = node.type?.property(prop.name);
 
         if (!propType) {
             if (node.type?.valid) {

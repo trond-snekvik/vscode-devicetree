@@ -387,7 +387,7 @@ class DTSEngine implements
 
 
             nodes
-            .filter(n => n.parent && (n.type?.name === 'fixed-partitions' || (Array.isArray(n.type?.include) ? n.type.include.includes('fixed-partitions') : n.type?.include === 'fixed-partitions')))
+            .filter(n => n.parent && (n.type?.name === 'fixed-partitions' || n.type.includes('fixed-partitions')))
             .forEach((n, _, all) => {
                 let parent = flash;
                 if (all.length > 1) {
@@ -463,7 +463,7 @@ class DTSEngine implements
             });
 
             controllerItems.filter(c => c.children.length).forEach((controller, i) => {
-                const cells = controllers[i]?.type?.['interrupt-cells'] as string[];
+                const cells = controllers[i]?.type.cells('interrupt') as string[];
                 controller.children.sort((a, b) => a.interrupts.array[0] - b.interrupts.array[0]).forEach(child => {
                     const irq = new TreeInfoItem(element, child.node.uniqueName);
                     irq.path = child.node.path;
@@ -643,7 +643,6 @@ class DTSEngine implements
         const timeStart = process.hrtime();
         const bindingDirs = getBindingDirs();
         await Promise.all(bindingDirs.map(d => this.types.addFolder(d)));
-        this.types.finalize();
         const procTime = process.hrtime(timeStart);
         console.log(`Found ${Object.keys(this.types.types).length} bindings in ${bindingDirs.join(', ')}. ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
         await this.loadCtxs();
@@ -1169,7 +1168,7 @@ class DTSEngine implements
             }
         }
 
-        const propType = type.properties.find(p => p.name === symbol);
+        const propType = type.property(symbol);
         if (propType) {
             const results: vscode.MarkdownString[] = [];
             if (propType.description) {
@@ -1199,8 +1198,8 @@ class DTSEngine implements
 
         if (entry.nameLoc.range.contains(position)) {
             const results: vscode.MarkdownString[] = [];
-            if (type.title) {
-                results.push(new vscode.MarkdownString(type.title));
+            if (type.compatible) {
+                results.push(new vscode.MarkdownString(type.compatible));
             }
             if (type.description) {
                 results.push(new vscode.MarkdownString(type.description));
@@ -1209,7 +1208,7 @@ class DTSEngine implements
             results.push(new vscode.MarkdownString('`' + node.path + '`'));
 
             // Show pin assignments:
-            if (node.pins?.length && node.type?.['gpio-cells']?.length > 0) {
+            if (node.pins?.length && node.type.cells('gpio')?.length > 0) {
                 const pins = new vscode.MarkdownString('Pin assigments:\n\n');
                 pins.appendMarkdown('| Pin | Node | Property |\n');
                 pins.appendMarkdown('|-----|------|----------|\n');
@@ -1453,8 +1452,8 @@ class DTSEngine implements
                 completion.detail = l.node.path;
                 if (l.type) {
                     completion.documentation = new vscode.MarkdownString();
-                    if (l.type.title) {
-                        completion.documentation.appendMarkdown(`**${l.type.title}**\n\n`);
+                    if (l.type.compatible) {
+                        completion.documentation.appendMarkdown(`**${l.type.compatible}**\n\n`);
                     }
                     if (l.type.valid) {
                         completion.documentation.appendText(`\n\n${l.type.description}`);
@@ -1552,7 +1551,7 @@ class DTSEngine implements
                 }
 
                 const range = new vscode.Range(position.line, start, position.line, end);
-                const propType = (node.type?.properties.find(p => p.name === prop.name));
+                const propType = (node.type?.property(prop.name));
                 if (propType) {
                     if (propType.enum) {
                         const filterText = document.getText(document.getWordRangeAtPosition(position));
@@ -1589,7 +1588,7 @@ class DTSEngine implements
                                 completion.insertText = propValueTemplate(typename, 'string');
                             }
 
-                            completion.detail = type.title;
+                            completion.detail = type.compatible;
                             completion.documentation = type.description ?? '';
                             return completion;
                         })
@@ -1646,16 +1645,16 @@ class DTSEngine implements
             .filter(n => n.valid && n.name && (!n.name.startsWith('/') || n.name.startsWith(node.name)));
 
         // Do some pretty conservative filtering, not the end of the world if the user's node doesn't show up
-        if (node.type?.['bus']) {
-            nodes = nodes.filter(n => n['on-bus'] === node.type['bus']);
-        } else if (node.type?.['child-binding']) {
-            nodes = [node.type['child-binding']];
+        if (node.type?.bus) {
+            nodes = nodes.filter(n => n.onBus === node.type.bus);
+        } else if (node.type?.child) {
+            nodes = [node.type.child];
         } else if (node.name === 'cpus') {
-            nodes = nodes.filter(n => n.include === 'cpu.yaml');
+            nodes = nodes.filter(n => n.includes('cpu'));
         } else if (node.name === 'soc') {
             // Stuff on the soc node are peripherals, should be made by the chip vendor
             const vendor = node.parent.property('compatible')?.string?.match(/(.*?),/)?.[1];
-            nodes = nodes.filter(n => !n["on-bus"] && n.include !== 'cpu.yaml' && (!vendor || n.name.startsWith(vendor + ',')));
+            nodes = nodes.filter(n => !n.onBus && !n.includes('cpu') && (!vendor || n.name.startsWith(vendor + ',')));
         } else if (node.path === '/') {
             nodes = nodes.filter(n => n.name.startsWith('/'));
         } else {
@@ -1740,7 +1739,7 @@ class DTSEngine implements
             return;
         }
 
-        const propType = node.type.properties.find(p => p.name === prop.name);
+        const propType = node.type.property(prop.name);
         if (propType?.type === 'int' && propType.description) {
             const info = new vscode.SignatureInformation(`${node.path}${prop.name}`, propType.description);
             info.parameters = [new vscode.ParameterInformation(`number`)];

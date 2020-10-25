@@ -1638,7 +1638,7 @@ export class DTSCtx {
             return [this.boardFile, ...this.overlays];
         }
 
-        return this.overlays;
+        return [...this.overlays];
     }
 
     get macros() {

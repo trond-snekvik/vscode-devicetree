@@ -23,18 +23,63 @@ export interface PropertyType {
     isLoaded?: boolean;
 }
 
-export interface NodeType {
-    name: string;
-    compatible?: string;
-    properties: PropertyType[];
-    filename?: string;
-    title?: string;
-    valid: boolean;
-    include?: string | string[];
-    description?: string;
-    'bus'?: string;
-    'on-bus'?: string;
-    'child-binding'?: NodeType;
+export class NodeType {
+    private _properties: PropertyType[];
+    private _include?: NodeType[];
+    private _cells: {[cell: string]: string[]};
+    private _bus: string;
+    readonly compatible: string;
+    readonly filename?: string;
+    readonly title?: string;
+    readonly valid: boolean;
+    readonly description?: string;
+    readonly child?: NodeType;
+
+    constructor(loader: TypeLoader, tree: any, filename?: string) {
+        const loadedProperties: PropertyType[] = (('properties' in tree) ? Object.keys(tree['properties']).map(name => {
+            return <PropertyType>{name: name, ...tree['properties'][name], isLoaded: true};
+        }) : []);
+
+        if (tree['on-bus']) { // legacy
+            this._bus = tree['on-bus'];
+        }
+        this._bus = tree['bus'];
+        this._cells = {};
+        Object.keys(tree).filter(k => k.endsWith('-cells')).forEach(k => {
+            this._cells[k.slice(0, k.length - '-cells'.length)] = tree[k];
+        });
+        this.title = tree.title;
+        this.filename = filename;
+        this['include'] = undefined;
+        if (Array.isArray(tree.include)) {
+            this._include = tree.include;
+        } else if (tree.include) {
+            this._include = [tree.include];
+        }
+
+        this._properties = mergeProperties(loadedProperties, standardProperties);
+
+        if ('child-binding' in tree) {
+            this.child = new NodeType(loader, tree['child-binding']);
+        }
+
+        return this;
+    }
+
+    cells(type: string) {
+        return this._cells[type] ?? this._include.find(i => i.bus)?.bus;
+    }
+
+    get bus() {
+        return this._bus ?? this._include.find(i => i.bus)?.bus;
+    }
+    get properties() {
+        return this._include.reduce((props, included) => mergeProperties(props, included._properties), this._properties);
+    }
+
+    get name() {
+        return this.compatible;
+    }
 }
 
 const standardProperties: PropertyType[] = [
@@ -446,9 +491,6 @@ export class TypeLoader {
                 }
 
                 type.properties = mergeProperties(type.properties, includeType.properties);
-                if (!type.bus) {
-                    type.bus = includeType.bus;
-                }
                 // load all included tree entries that aren't in the child:
                 const entries = Object.keys(includeType).filter(e => e !== 'properties' && !(e in type));
                 entries.forEach(e => type[e] = includeType[e]);

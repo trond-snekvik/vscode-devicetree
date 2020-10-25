@@ -116,21 +116,20 @@ function boardRoots(): string[] {
 	return modules.map(m => m + '/boards').filter(dir => existsSync(dir));
 }
 
-function findBoards() {
+async function findBoards() {
 	boards = new Array<Board>();
-	for (const root of boardRoots()) {
-		glob(`**/*.dts`, {cwd: root}, (err, matches) => {
-			if (!err) {
-				matches.forEach(m => boards.push({name: path.basename(m, '.dts'), path: `${root}/${m}`, arch: m.split(/[/\\]/)?.[0]}));
-			}
-		});
-	}
+	return Promise.all(boardRoots().map(root => new Promise(resolve => glob(`**/*.dts`, { cwd: root }, (err, matches) => {
+		if (!err) {
+			matches.forEach(m => boards.push({name: path.basename(m, '.dts'), path: `${root}/${m}`, arch: m.split(/[/\\]/)?.[0]}));
+		}
+
+		resolve();
+	}))));
 }
 
 async function loadModules() {
 	modules = await west('list', '-f', '{posixpath}').then(out => out.split(/\r?\n/).map(line => line.trim()), _ => []);
-	findBoards();
-	return boards;
+	await findBoards();
 }
 
 export async function selectBoard(prompt='Set board'): Promise<Board> {

@@ -158,7 +158,7 @@ class TreeInfoItem {
     name: string;
     icon?: string;
     parent?: TreeInfoItem;
-    loc?: vscode.Location;
+    path?: string;
     description?: string;
     tooltip?: string;
     private _children: TreeInfoItem[];
@@ -313,11 +313,11 @@ class DTSEngine implements
                 item.tooltip = element.tooltip;
             }
 
-            if (element.loc) {
+            if (element.path) {
                 item.command = {
-                    command: 'vscode.open',
+                    command: 'devicetree.goto',
                     title: 'Show',
-                    arguments: [vscode.Uri.parse(`vscode://file/${element.loc.uri.path}:${element.loc.range.start.line + 1}:${element.loc.range.start.character + 1}`)]
+                    arguments: [element.path, element.ctx.files.pop().uri]
                 };
             }
 
@@ -350,14 +350,14 @@ class DTSEngine implements
                 n.pins.forEach((p, i) => {
                     if (p) {
                         const pin = new TreeInfoItem(element, `Pin ${i.toString()}`);
-                        pin.loc = p.prop.loc;
+                        pin.path = p.prop.path;
                         pin.tooltip = p.prop.entry.node.path + p.prop.name;
                         pin.description = `${p.prop.entry.node.uniqueName} • ${p.prop.name}`;
                         controller.addChild(pin);
                     }
                 });
 
-                controller.loc = n.entries[0]?.loc;
+                controller.path = n.path;
                 controller.description = n.pins.length + ' pins';
                 if (!controller.children.length) {
                     controller.description += ' - Nothing connected';
@@ -401,7 +401,7 @@ class DTSEngine implements
                     parent.description = sizeString(capacity);
                 }
 
-                parent.loc = n.parent.entries[0]?.loc;
+                parent.path = n.parent.path;
 
                 let offset = 0;
                 n.children().filter(c => c.regs()?.[0]?.addrs.length === 1).sort((a, b) => (a.regs()[0].addrs[0]?.val ?? 0) - (b.regs()[0].addrs[0]?.val ?? 0)).forEach(c => {
@@ -418,14 +418,12 @@ class DTSEngine implements
                         partition.description += ` - ${sizeString(offset - start)} overlap!`;
                     }
                     partition.tooltip = `0x${start.toString(16)} - 0x${(start + size - 1).toString(16)}`;
-                    partition.loc = c.entries[0]?.loc;
+                    partition.path = c.path;
 
                     const startItem = new TreeInfoItem(element, 'Start', undefined, reg[0].addrs[0].toString(true));
-                    startItem.loc = reg[0].addrs[0].loc;
                     partition.addChild(startItem);
 
                     const sizeItem = new TreeInfoItem(element, 'Size', undefined, reg[0].sizes[0].toString(true));
-                    sizeItem.loc = reg[0].sizes[0].loc;
                     partition.addChild(sizeItem);
 
                     parent.addChild(partition);
@@ -468,7 +466,7 @@ class DTSEngine implements
                 const cells = controllers[i]?.type?.['interrupt-cells'] as string[];
                 controller.children.sort((a, b) => a.interrupts.array[0] - b.interrupts.array[0]).forEach(child => {
                     const irq = new TreeInfoItem(element, child.node.uniqueName);
-                    irq.loc = child.node.entries[0]?.nameLoc;
+                    irq.path = child.node.path;
                     irq.tooltip = child.node.path;
 
                     const cellValues = child.interrupts.array;
@@ -481,7 +479,7 @@ class DTSEngine implements
                     controller.item.addChild(irq);
                 });
 
-                controller.item.loc = controllers[i].entries[0]?.nameLoc;
+                controller.item.path = controllers[i].path;
 
                 if (controllers.length > 1) {
                     interrupts.addChild(controller.item);
@@ -505,11 +503,11 @@ class DTSEngine implements
                     bus.description = node.type.bus;
                 }
 
-                bus.loc = node.entries[0]?.loc;
+                bus.path = node.path;
                 bus.tooltip = node.path;
                 node.children().forEach(child => {
                     const busEntry = new TreeInfoItem(element, child.uniqueName);
-                    busEntry.loc = child.entries[0]?.loc;
+                    busEntry.path = child.path;
                     busEntry.tooltip = child.path;
                     if (child.address !== undefined) {
                         busEntry.description = `@ 0x${child.address.toString(16)}`;
@@ -964,6 +962,24 @@ class DTSEngine implements
                 if (entry?.nameLoc.range.contains(selection.start)) {
                     editNode(entry.node);
                 }
+            }
+        });
+
+        vscode.commands.registerCommand('devicetree.goto', async (p: string, uri?: vscode.Uri) => {
+            const ctx = uri ? this.parser.ctx(uri) : this.parser.currCtx;
+
+            let loc: vscode.Location;
+            if (p.endsWith('/')) {
+                loc = ctx?.node(p)?.entries[0]?.nameLoc;
+            } else {
+                loc = ctx?.node(path.dirname(p))?.property(path.basename(p))?.loc;
+            }
+
+            if (loc) {
+                const doc = await vscode.workspace.openTextDocument(loc.uri);
+                const editor = await vscode.window.showTextDocument(doc);
+                editor.revealRange(loc.range);
+                editor.selection = new vscode.Selection(loc.range.start, loc.range.start);
             }
         });
     }

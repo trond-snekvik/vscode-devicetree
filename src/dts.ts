@@ -1224,7 +1224,7 @@ export class DTSFile {
     }
 
     getPropertyAt(pos: vscode.Position, uri: vscode.Uri): Property {
-        return this.getEntryAt(pos, uri)?.properties.find(p => p.fullRange.contains(pos));
+        return this.getEntryAt(pos, uri)?.getPropertyAt(pos, uri);
     }
 
     addNode(path: string, properties: { [name: string]: string } = {}) {
@@ -1295,6 +1295,10 @@ export class NodeEntry {
         }
 
         return this.parent.depth + 1;
+    }
+
+    getPropertyAt(pos: vscode.Position, uri: vscode.Uri) {
+        return this.properties.find(p => p.fullRange.contains(pos) && p.loc.uri.toString() === uri.toString());
     }
 
     toString(indent?: string) {

@@ -56,7 +56,7 @@ export class NodeType {
         }
 
         this._include = this._include.map(i => i.split('.')?.[0]);
-        this._properties = { ...standardProperties, ...(tree.properties ?? {}) };
+        this._properties = tree.properties ?? {};
 
         for (const name in this._properties) {
             this._properties[name].name = name;
@@ -92,12 +92,15 @@ export class NodeType {
 
     private get propMap(): {[name: string]: PropertyType} {
         const props = { ...this._properties };
-        this.inclusions.forEach(i => {
-            const included = i.propMap;
+        const add = (included) => {
             for (const name in included) {
                 props[name] = { ...included[name], ...(props[name] ?? {}) };
             }
-        });
+        };
+
+        this.inclusions.forEach(i => add(i.propMap));
+        add(standardProperties);
+
         return props;
     }
 

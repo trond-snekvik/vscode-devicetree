@@ -740,6 +740,10 @@ export class Property {
         this.fullRange = new vscode.Range(loc.range.start, state.location().range.end);
     }
 
+    get path() {
+        return this.entry.node.path + this.name;
+    }
+
     toString(indent=0): string {
         if (this.value.length === 1 && this.value[0] instanceof BoolValue) {
             return `${this.name}`;

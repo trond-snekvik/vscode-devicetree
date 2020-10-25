@@ -1258,23 +1258,33 @@ class DTSEngine implements
                 .map(e => new vscode.Location(e.loc.uri, e.loc.range));
         }
 
-        const word = document.getWordRangeAtPosition(position, /"[\w,-]+"/);
-        if (!word) {
+        const entry = file.getEntryAt(position, document.uri);
+        if (!entry) {
             return;
         }
-        let symbol = document.getText(word);
 
-        if (symbol) {
-            symbol = symbol.slice(1, symbol.length - 1);
-            const prop = file.ctx.getPropertyAt(position, document.uri);
-            if (!prop) {
-                return;
+        if (entry.nameLoc.uri.toString() === document.uri.toString() && entry.nameLoc.range.contains(position)) {
+            return entry.node.entries.map(e => e.nameLoc);
+        }
+
+        const prop = entry.getPropertyAt(position, document.uri);
+        if (prop) {
+            if (prop.loc.range.contains(position) && prop.loc.uri.toString() === document.uri.toString()) {
+                return prop.entry.node.uniqueProperties().find(p => p.name === prop.name)?.loc;
             }
 
-            if (prop.name === 'compatible') {
-                const type = prop.entry.node.type;
-                if (type && type.filename.length > 0) {
-                    return new vscode.Location(vscode.Uri.file(type.filename), new vscode.Position(0, 0));
+            const type = prop.valueAt(position, document.uri);
+            if (prop.name === 'compatible' && type instanceof dts.StringValue) {
+                const filename = this.types.get(type.val)?.[0]?.filename;
+                if (filename) {
+                    return new vscode.Location(vscode.Uri.file(filename), new vscode.Position(0, 0));
+                }
+            }
+
+            if (type instanceof dts.ArrayValue) {
+                const cell = type.cellAt(position, document.uri);
+                if (cell instanceof dts.PHandle) {
+                    return file.ctx.node(cell.val)?.entries[0]?.nameLoc;
                 }
             }
         }

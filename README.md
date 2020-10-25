@@ -39,6 +39,7 @@ This extension is an independent community contribution, and is not part of the 
   - Address collisions
   - Name property matches
   - GPIO pin collisions
+  - Duplicate labels
 
 ![Code completion](doc/completion.png)
 

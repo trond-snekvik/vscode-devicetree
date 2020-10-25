@@ -229,6 +229,7 @@ class DTSEngine implements
                 types: this.types,
                 ctx,
                 gpioControllers: [],
+                labels: {},
             };
 
             lint(lintCtx);

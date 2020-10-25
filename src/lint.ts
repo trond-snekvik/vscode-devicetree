@@ -8,7 +8,7 @@ import { getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, String
 import * as types from './types';
 import { DiagnosticsSet } from './diags';
 
-export type LintCtx = { ctx: DTSCtx, types: types.TypeLoader, diags: DiagnosticsSet, gpioControllers: Node[] };
+export type LintCtx = { ctx: DTSCtx, types: types.TypeLoader, diags: DiagnosticsSet, gpioControllers: Node[], labels: {[name: string]: Node} };
 
 function countText(count: number, text: string, plural?: string): string {
     if (!plural) {
@@ -348,6 +348,13 @@ function lintNode(node: Node, ctx: LintCtx) {
                 const diag = ctx.diags.pushLoc(prop.loc, `Expected ${countText(named.value.length, 'name')}, found ${prop.value.length}`);
                 diag.relatedInformation = [ new vscode.DiagnosticRelatedInformation(named.loc, `Property ${name} has ${countText(named.value.length, 'element')}.`)];
                 return;
+            }
+        } else if (prop.name === 'label' && prop.string) {
+            if (prop.string in ctx.labels) {
+                const diag = ctx.diags.pushLoc(prop.valueLoc, `Label "${prop.string}" already used by ${ctx.labels[prop.string].uniqueName}.\nLabels must be unique to be unambigously accesible by device_get_binding()`);
+                diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(ctx.labels[prop.string].entries[0]?.loc, `${ctx.labels[prop.string].uniqueName} defined here`)];
+            } else {
+                ctx.labels[prop.string] = prop.entry.node;
             }
         }
     });

@@ -1261,12 +1261,6 @@ export class DTSFile {
                 existing = new NodeEntry(null, node, null, this, this.entries.length);
             }
         }
-
-        if (!existing.loc) {
-            // Should
-        }
-
-
     }
 }
 

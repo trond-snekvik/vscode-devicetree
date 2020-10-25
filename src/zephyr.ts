@@ -5,7 +5,7 @@
  */
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { env, config } from 'process';
+import { env } from 'process';
 import { ExecOptions, exec } from 'child_process';
 import { existsSync } from 'fs';
 import * as glob from 'glob';

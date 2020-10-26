@@ -79,6 +79,10 @@ export class NodeType {
     }
 
     cells(type: string): string[] {
+        if (type.endsWith('-cells')) {
+            type = type.slice(0, type.length - '-cells'.length);
+        }
+
         return this._cells[type] ?? this.inclusions.find(i => i.cells(type))?.cells(type);
     }
 

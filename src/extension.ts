@@ -1385,7 +1385,7 @@ class DTSEngine implements
                         } else if (p.type === 'phandle-array' && p.name.endsWith('-gpios') && defaultGpioController) {
                             snippet.appendText('< ');
                             snippet.appendPlaceholder(`&${defaultGpioController.labels()[0] ?? '"' + defaultGpioController.path + '"'}`);
-                            const cells = defaultGpioController.type?.[dts.cellName(p.name)] as string[];
+                            const cells = defaultGpioController.type?.cells(dts.cellName(p.name)) as string[];
                             if (cells) {
                                 cells.forEach(c => {
                                     snippet.appendText(' ');

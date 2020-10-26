@@ -1015,7 +1015,7 @@ export class Property {
                     const cellCount = parent?.cellCount(this.name);
                     if (cellCount !== undefined) {
                         const cells = new Array(cellCount).fill('cell').map((c, i) => `${c}-${i}`);
-                        (<string[]>parent.type?.[cellName(this.name)])?.forEach((name, i) => cells[i] = name);
+                        (<string[]>parent.type?.cells(cellName(this.name)))?.forEach((name, i) => cells[i] = name);
                         return cells;
                     }
                 }
@@ -1428,7 +1428,7 @@ export class Node {
 
     /** Cell names exposed when the node is referenced */
     refCellNames(prop: string): string[] {
-        const typeCellNames = this.type?.[cellName(prop)];
+        const typeCellNames = this.type?.cells(cellName(prop));
         if (typeCellNames) {
             return typeCellNames;
         }

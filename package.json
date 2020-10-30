@@ -229,6 +229,12 @@
                     }
                 }
             }
+        ],
+        "yamlValidation": [
+            {
+                "fileMatch": "dts/bindings/**/*.yaml",
+                "url": "./syntax/bindings-schema.yaml"
+            }
         ]
     },
     "scripts": {

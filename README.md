@@ -27,6 +27,7 @@ This extension is an independent community contribution, and is not part of the 
 - Show GPIO pin assignments
 - Manage DeviceTree contexts
 - Format selection
+- Code completion for bindings files (depends on [Red Hat's YAML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml))
 - Linting language rules
   - Redundant properties
   - Required properties
@@ -64,6 +65,12 @@ The DeviceTree contexts show up in the explorer sidebar:
 The DeviceTree contexts can be saved in a context file by pressing the Save button on the DeviceTree context explorer. This allows you to restore the contexts the next time you open the folder. The location of the context file can be changed by setting the "devicetree.ctxFile" configuration entry in the VS Code settings.
 
 It's possible to add shield files to the same context by pressing "DeviceTree: Add Shield..." on the context in the DeviceTree context explorer. Shield files will be processed ahead of the overlay file.
+
+### Bindings files code completion and schema validation
+
+The DeviceTree bindings are described in yaml files. This extension provides a schema file for [Red Hat's YAML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml), which provides code completion, documentation and validation for YAML files under dts/bindings.
+
+![Bindings completion](doc/bindings.png)
 
 ## Installation
 

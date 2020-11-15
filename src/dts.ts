@@ -832,6 +832,12 @@ export class Property {
         }
     }
 
+    get arrays() {
+        if (this.value.every(v => v instanceof ArrayValue && v.val.every(v => v instanceof IntValue))) {
+            return this.value.map(v => v.val.map(v => v.val) as number[]);
+        }
+    }
+
     get pHandles() {
         if (this.value.length === 1 && (this.value[0] instanceof ArrayValue) && this.value[0].val.every(v => v instanceof PHandle)) {
             return this.value[0].val as PHandle[];

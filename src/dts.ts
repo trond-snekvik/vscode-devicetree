@@ -1391,6 +1391,16 @@ export class Node {
         return this.path;
     }
 
+    /** Local user readable name for this node */
+    get localUniqueName(): string {
+        const labels = this.labels();
+        if (labels.length) {
+            return '&' + labels[0];
+        }
+
+        return this.fullName;
+    }
+
     get refName(): string {
         const labels = this.labels();
         if (labels.length) {

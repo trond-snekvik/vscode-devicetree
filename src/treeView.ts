@@ -305,18 +305,26 @@ export class DTSTreeView implements
             controllerItems.filter(c => c.children.length).forEach((controller, i) => {
                 const cells = controllers[i]?.type.cells('interrupt') as string[];
                 controller.children.sort((a, b) => a.interrupts.array?.[0] - b.interrupts.array?.[0]).forEach(child => {
-                    const irq = new TreeInfoItem(element, child.node.uniqueName);
-                    irq.path = child.node.path;
-                    irq.tooltip = child.node.path;
+                    const childIrqs = child.interrupts.arrays;
+                    const irqNames = child.node.property('interrupt-names')?.stringArray;
+                    childIrqs.forEach((cellValues, i, all) => {
+                        const irq = new TreeInfoItem(element, child.node.uniqueName);
+                        irq.path = child.node.path;
+                        irq.tooltip = child.node.path;
 
-                    const cellValues = child.interrupts.array;
-                    const prioIdx = cells.indexOf('priority');
-                    if (cellValues && prioIdx >= 0) {
-                        irq.description = 'Priority: ' + cellValues[prioIdx].toString();
-                    }
+                        // Some nodes have more than one interrupt:
+                        if (all.length > 1) {
+                            irq.name += ` (${irqNames?.[i] ?? i})`;
+                        }
 
-                    cells?.forEach((cell, i) => irq.addChild(new TreeInfoItem(element, cell.replace(/^\w/, letter => letter.toUpperCase()) + ':', undefined, cellValues[i]?.toString() ?? 'N/A')));
-                    controller.item.addChild(irq);
+                        const prioIdx = cells.indexOf('priority');
+                        if (cellValues && prioIdx >= 0) {
+                            irq.description = 'Priority: ' + cellValues[prioIdx].toString();
+                        }
+
+                        cells?.forEach((cell, i) => irq.addChild(new TreeInfoItem(element, cell.replace(/^\w/, letter => letter.toUpperCase()) + ':', undefined, cellValues?.[i]?.toString() ?? 'N/A')));
+                        controller.item.addChild(irq);
+                    });
                 });
 
                 controller.item.path = controllers[i].path;

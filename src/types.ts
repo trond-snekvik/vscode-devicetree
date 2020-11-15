@@ -477,7 +477,7 @@ export class TypeLoader {
         let types = getBaseType();
 
         if (!types.length) {
-            types = [new NodeType({ name: '<unknown>', filename: '', valid: false, properties: { ...standardProperties } })];
+            types = [new AbstractNodeType({ name: '<unknown>', properties: { ...standardProperties } })];
         }
 
         if (node.parent?.type && types.length > 1) {

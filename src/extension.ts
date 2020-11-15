@@ -412,12 +412,12 @@ class DTSEngine implements
                 n.children().filter(c => c.regs()?.[0]?.addrs.length === 1).sort((a, b) => (a.regs()[0].addrs[0]?.val ?? 0) - (b.regs()[0].addrs[0]?.val ?? 0)).forEach(c => {
                     const reg = c.regs();
                     const start = reg[0].addrs[0].val;
-                    const size = reg[0].sizes[0].val;
+                    const size = reg[0].sizes?.[0]?.val ?? 0;
                     if (start > offset) {
                         parent.addChild(new TreeInfoItem(element, `Free space @ 0x${offset.toString(16)}`, undefined, sizeString(start - offset)));
                     }
 
-                    const partition = new TreeInfoItem(element, c.property('label')?.value[0].val as string ?? c.uniqueName);
+                    const partition = new TreeInfoItem(element, c.property('label')?.value?.[0]?.val as string ?? c.uniqueName);
                     partition.description = sizeString(size);
                     if (start < offset) {
                         partition.description += ` - ${sizeString(offset - start)} overlap!`;
@@ -428,8 +428,10 @@ class DTSEngine implements
                     const startItem = new TreeInfoItem(element, 'Start', undefined, reg[0].addrs[0].toString(true));
                     partition.addChild(startItem);
 
-                    const sizeItem = new TreeInfoItem(element, 'Size', undefined, reg[0].sizes[0].toString(true));
-                    partition.addChild(sizeItem);
+                    if (size) {
+                        const sizeItem = new TreeInfoItem(element, 'Size', undefined, reg[0].sizes[0].toString(true));
+                        partition.addChild(sizeItem);
+                    }
 
                     parent.addChild(partition);
                     offset = start + size;
@@ -469,14 +471,14 @@ class DTSEngine implements
 
             controllerItems.filter(c => c.children.length).forEach((controller, i) => {
                 const cells = controllers[i]?.type.cells('interrupt') as string[];
-                controller.children.sort((a, b) => a.interrupts.array[0] - b.interrupts.array[0]).forEach(child => {
+                controller.children.sort((a, b) => a.interrupts.array?.[0] - b.interrupts.array?.[0]).forEach(child => {
                     const irq = new TreeInfoItem(element, child.node.uniqueName);
                     irq.path = child.node.path;
                     irq.tooltip = child.node.path;
 
                     const cellValues = child.interrupts.array;
                     const prioIdx = cells.indexOf('priority');
-                    if (prioIdx >= 0) {
+                    if (cellValues && prioIdx >= 0) {
                         irq.description = 'Priority: ' + cellValues[prioIdx].toString();
                     }
 
@@ -681,7 +683,7 @@ class DTSEngine implements
         this.treeView = vscode.window.createTreeView('trond-snekvik.devicetree.ctx', {showCollapseAll: true, canSelectMany: false, treeDataProvider: this});
 
         vscode.window.onDidChangeActiveTextEditor(e => {
-            if (!this.treeView.visible) {
+            if (!e || !this.treeView.visible || !e.document) {
                 return;
             }
 

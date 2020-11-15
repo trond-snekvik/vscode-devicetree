@@ -2268,8 +2268,8 @@ export class Parser {
         // Resolve types:
         let time = process.hrtime();
         Object.values(ctx.nodes).forEach(node => {
-            if (!node.type) {
-                node.type = (this.types.nodeType(node) ?? this.types.types['base']?.[0]);
+            if (!node.type?.valid) {
+                node.type = this.types.nodeType(node);
             }
         });
         time = process.hrtime(time);

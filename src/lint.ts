@@ -344,7 +344,7 @@ function lintNode(node: Node, ctx: LintCtx) {
                 cells = ctx.ctx.node(parentRef.val)?.cellCount(name);
             }
 
-            if (named.value.flatMap(v => v.val).length !== cells * prop.value.length) {
+            if (named.value.length !== cells * prop.value.length) {
                 const diag = ctx.diags.pushLoc(prop.loc, `Expected ${countText(named.value.length, 'name')}, found ${prop.value.length}`);
                 diag.relatedInformation = [ new vscode.DiagnosticRelatedInformation(named.loc, `Property ${name} has ${countText(named.value.length, 'element')}.`)];
                 return;

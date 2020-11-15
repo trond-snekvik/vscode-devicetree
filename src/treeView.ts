@@ -388,6 +388,40 @@ export class DTSTreeView implements
                 details.addChild(buses);
             }
 
+            const adcs = new TreeInfoItem(element, 'ADCs', 'adc');
+            nodes.filter(node => node.type?.includes('adc-controller')).forEach(node => {
+                const adc = new TreeInfoItem(element, node.uniqueName);
+                adc.path = node.path;
+                adc.tooltip = node.path;
+                nodes
+                .filter(n => n.property('io-channels')?.entries?.some(entry => (entry.target instanceof PHandle) && entry.target.is(node)))
+                .map(usr => {
+                    const channels = usr.property('io-channels').entries.find(c => c.target.is(node));
+                    return {node: usr, idx: channels.cells[0]?.val ?? -1};
+                })
+                .sort((a, b) => a.idx - b.idx)
+                .forEach(channel => {
+                    const entry = new TreeInfoItem(element, `Channel ${channel.idx}`, undefined, channel.node.uniqueName);
+                    entry.path = channel.node.path;
+                    adc.addChild(entry);
+                });
+
+                if (!adc.children.length) {
+                    adc.addChild(new TreeInfoItem(element, '', undefined, 'No channels in use.'));
+                }
+
+                adcs.addChild(adc);
+            });
+
+            if (adcs.children.length === 1) {
+                adcs.children[0].icon = adcs.icon;
+                adcs.children[0].description = adcs.children[0].name;
+                adcs.children[0].name = adcs.name;
+                details.addChild(adcs.children[0]);
+            } else if (adcs.children.length) {
+                details.addChild(adcs);
+            }
+
             /////////////////////////////
             if (details.children.length) {
                 return [details, ...element.files];

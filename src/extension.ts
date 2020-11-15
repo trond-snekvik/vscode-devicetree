@@ -362,6 +362,10 @@ class DTSEngine implements
                 controller.description = n.pins.length + ' pins';
                 if (!controller.children.length) {
                     controller.description += ' - Nothing connected';
+                } else if (controller.children.length < n.pins.length) {
+                    const unconnected = new TreeInfoItem(element, '');
+                    unconnected.description = `${n.pins.length - controller.children.length} unused pins`;
+                    controller.addChild(unconnected);
                 }
 
                 gpio.addChild(controller);

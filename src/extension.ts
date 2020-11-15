@@ -513,14 +513,27 @@ class DTSEngine implements
                 bus.path = node.path;
                 bus.tooltip = node.path;
                 node.children().forEach(child => {
-                    const busEntry = new TreeInfoItem(element, child.uniqueName);
+                    const busEntry = new TreeInfoItem(element, child.localUniqueName);
                     busEntry.path = child.path;
                     busEntry.tooltip = child.path;
                     if (child.address !== undefined) {
                         busEntry.description = `@ 0x${child.address.toString(16)}`;
+
+                        // SPI nodes have chip selects
+                        if (node.type.bus === 'spi') {
+                            const csGpios = node.property('cs-gpios');
+                            const cs = csGpios?.entries?.[child.address];
+                            if (cs) {
+                                const csEntry = new TreeInfoItem(element, `Chip select`);
+                                csEntry.description = `${cs.target.toString(true)} ${cs.cells.map(c => c.toString(true)).join(' ')}`;
+                                csEntry.path = csGpios.path;
+                                busEntry.addChild(csEntry);
+                            }
+                        }
                     }
 
                     bus.addChild(busEntry);
+
                 });
 
                 if (!bus.children.length) {

@@ -175,7 +175,7 @@ class TreeInfoItem {
         return this._children;
     }
 
-    get id() {
+    get id(): string {
         if (this.parent) {
             return `${this.parent.id}.${this.name}(${this.description?? ''})`;
         }

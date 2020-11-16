@@ -639,6 +639,7 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
         const equivalent: {[name: string]: string[]} = {
             'string-array': ['string'],
             'phandle-array': ['phandles', 'phandle'],
+            'phandles': ['phandle'],
             'array': ['int']
         };
 

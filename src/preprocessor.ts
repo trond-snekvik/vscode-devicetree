@@ -407,7 +407,7 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
                 }
 
                 if (directive[1] === 'include') {
-                    const include = value.replace(/(?:"([-/\w.$%]+)"|<([-/\w.$%]+)>)/g, '$1$2').trim();
+                    const include = value.replace(/(?:"([^\s">]+)"|<([^\s">]+)>)/g, '$1$2').trim();
                     if (!include) {
                         pushLineDiag(line, 'Invalid include');
                         continue;

@@ -181,257 +181,7 @@ export class DTSTreeView implements
             }
 
             if (element instanceof DTSCtx) {
-                const details = new TreeInfoItem(element, 'Overview');
-                const nodes = element.nodeArray();
-                const gpio = new TreeInfoItem(element, 'GPIO', 'gpio');
-                nodes.filter(n => n.pins).forEach((n, _, all) => {
-                    const controller = new TreeInfoItem(element, n.uniqueName);
-                    n.pins.forEach((p, i) => {
-                        if (p) {
-                            const pin = new TreeInfoItem(element, `Pin ${i.toString()}`);
-                            pin.path = p.prop.path;
-                            pin.tooltip = p.prop.entry.node.path + p.prop.name;
-                            pin.description = `${p.prop.entry.node.uniqueName} • ${p.prop.name}`;
-                            controller.addChild(pin);
-                        }
-                    });
-
-                    controller.path = n.path;
-                    controller.description = n.pins.length + ' pins';
-                    if (!controller.children.length) {
-                        controller.description += ' - Nothing connected';
-                    } else if (controller.children.length < n.pins.length) {
-                        const unconnected = new TreeInfoItem(element, '');
-                        unconnected.description = `${n.pins.length - controller.children.length} unused pins`;
-                        controller.addChild(unconnected);
-                    }
-
-                    gpio.addChild(controller);
-                });
-
-                if (gpio.children.length) {
-                    details.addChild(gpio);
-                }
-
-                const flash = new TreeInfoItem(element, 'Flash', 'flash');
-                const sizeString = size => {
-                    const spec = [
-                        { size: 1024 * 1024, name: 'MB' },
-                        { size: 1024, name: 'kB' },
-                        { size: 1, name: 'B' },
-                    ].find(spec => size > spec.size);
-
-                    if (size % spec.size) {
-                        return (size / spec.size).toFixed(3) + ' ' + spec.name;
-                    }
-
-                    return (size / spec.size).toString() + ' ' + spec.name;
-                };
-
-                nodes
-                    .filter(n => n.parent && (n.type?.name === 'fixed-partitions' || n.type.includes('fixed-partitions')))
-                    .forEach((n, _, all) => {
-                        let parent = flash;
-                        if (all.length > 1) {
-                            parent = new TreeInfoItem(element, n.parent.uniqueName);
-                            flash.addChild(parent);
-                        }
-
-                        const regs = n.parent.regs();
-                        const capacity = regs?.[0]?.sizes[0]?.val;
-                        if (capacity !== undefined) {
-                            parent.description = sizeString(capacity);
-                        }
-
-                        parent.path = n.parent.path;
-
-                        let offset = 0;
-                        n.children().filter(c => c.regs()?.[0]?.addrs.length === 1).sort((a, b) => (a.regs()[0].addrs[0]?.val ?? 0) - (b.regs()[0].addrs[0]?.val ?? 0)).forEach(c => {
-                            const reg = c.regs();
-                            const start = reg[0].addrs[0].val;
-                            const size = reg[0].sizes?.[0]?.val ?? 0;
-                            if (start > offset) {
-                                parent.addChild(new TreeInfoItem(element, `Free space @ 0x${offset.toString(16)}`, undefined, sizeString(start - offset)));
-                            }
-
-                            const partition = new TreeInfoItem(element, c.property('label')?.value?.[0]?.val as string ?? c.uniqueName);
-                            partition.description = sizeString(size);
-                            if (start < offset) {
-                                partition.description += ` - ${sizeString(offset - start)} overlap!`;
-                            }
-                            partition.tooltip = `0x${start.toString(16)} - 0x${(start + size - 1).toString(16)}`;
-                            partition.path = c.path;
-
-                            const startItem = new TreeInfoItem(element, 'Start', undefined, reg[0].addrs[0].toString(true));
-                            partition.addChild(startItem);
-
-                            if (size) {
-                                const sizeItem = new TreeInfoItem(element, 'Size', undefined, reg[0].sizes[0].toString(true));
-                                partition.addChild(sizeItem);
-                            }
-
-                            parent.addChild(partition);
-                            offset = start + size;
-                        });
-
-                        if (capacity !== undefined && offset !== capacity) {
-                            parent.addChild(new TreeInfoItem(element, `Free space @ 0x${offset.toString(16)}`, undefined, sizeString(capacity - offset)));
-                        }
-                    });
-
-                if (flash.children.length) {
-                    details.addChild(flash);
-                }
-
-                const interrupts = new TreeInfoItem(element, 'Interrupts', 'interrupts');
-                const controllers = nodes.filter(n => n.property('interrupt-controller'));
-                const controllerItems = controllers.map(n => ({ item: new TreeInfoItem(element, n.uniqueName), children: new Array<{ node: Node, interrupts: Property }>() }));
-                nodes.filter(n => n.property('interrupts')).forEach(n => {
-                    const interrupts = n.property('interrupts');
-                    let node = n;
-                    let interruptParent: Property;
-                    while (node && !(interruptParent = node.property('interrupt-parent'))) {
-                        node = node.parent;
-                    }
-
-                    if (!interruptParent?.pHandle) {
-                        return;
-                    }
-
-                    const ctrlIdx = controllers.findIndex(c => interruptParent.pHandle?.is(c));
-                    if (ctrlIdx < 0) {
-                        return;
-                    }
-
-                    controllerItems[ctrlIdx].children.push({ node: n, interrupts });
-                });
-
-                controllerItems.filter(c => c.children.length).forEach((controller, i) => {
-                    const cells = controllers[i]?.type.cells('interrupt') as string[];
-                    controller.children.sort((a, b) => a.interrupts.array?.[0] - b.interrupts.array?.[0]).forEach(child => {
-                        const childIrqs = child.interrupts.arrays;
-                        const irqNames = child.node.property('interrupt-names')?.stringArray;
-                        childIrqs.forEach((cellValues, i, all) => {
-                            const irq = new TreeInfoItem(element, child.node.uniqueName);
-                            irq.path = child.node.path;
-                            irq.tooltip = child.node.path;
-
-                            // Some nodes have more than one interrupt:
-                            if (all.length > 1) {
-                                irq.name += ` (${irqNames?.[i] ?? i})`;
-                            }
-
-                            const prioIdx = cells.indexOf('priority');
-                            if (cellValues && prioIdx >= 0) {
-                                irq.description = 'Priority: ' + cellValues[prioIdx].toString();
-                            }
-
-                            cells?.forEach((cell, i) => irq.addChild(new TreeInfoItem(element, cell.replace(/^\w/, letter => letter.toUpperCase()) + ':', undefined, cellValues?.[i]?.toString() ?? 'N/A')));
-                            controller.item.addChild(irq);
-                        });
-                    });
-
-                    controller.item.path = controllers[i].path;
-
-                    if (controllers.length > 1) {
-                        interrupts.addChild(controller.item);
-                    } else {
-                        // Skip second depth if there's just one interrupt controller
-                        controller.item.description = controller.item.name;
-                        controller.item.name = interrupts.name;
-                        controller.item.icon = interrupts.icon;
-                        details.addChild(controller.item);
-                    }
-                });
-
-                if (interrupts.children.length) {
-                    details.addChild(interrupts);
-                }
-
-                const buses = new TreeInfoItem(element, 'Buses', 'bus');
-                nodes.filter(node => node.type?.bus).forEach(node => {
-                    const bus = new TreeInfoItem(element, node.uniqueName);
-                    if (!bus.name.toLowerCase().includes(node.type.bus.toLowerCase())) {
-                        bus.description = node.type.bus;
-                    }
-
-                    bus.path = node.path;
-                    bus.tooltip = node.path;
-                    node.children().forEach(child => {
-                        const busEntry = new TreeInfoItem(element, child.localUniqueName);
-                        busEntry.path = child.path;
-                        busEntry.tooltip = child.path;
-                        if (child.address !== undefined) {
-                            busEntry.description = `@ 0x${child.address.toString(16)}`;
-
-                            // SPI nodes have chip selects
-                            if (node.type.bus === 'spi') {
-                                const csGpios = node.property('cs-gpios');
-                                const cs = csGpios?.entries?.[child.address];
-                                if (cs) {
-                                    const csEntry = new TreeInfoItem(element, `Chip select`);
-                                    csEntry.description = `${cs.target.toString(true)} ${cs.cells.map(c => c.toString(true)).join(' ')}`;
-                                    csEntry.path = csGpios.path;
-                                    busEntry.addChild(csEntry);
-                                }
-                            }
-                        }
-
-                        bus.addChild(busEntry);
-
-                    });
-
-                    if (!bus.children.length) {
-                        bus.description = (bus.description ? bus.description + ' ' : '') + '• Nothing connected';
-                    }
-
-                    buses.addChild(bus);
-                });
-
-                if (buses.children.length) {
-                    details.addChild(buses);
-                }
-
-                const adcs = new TreeInfoItem(element, 'ADCs', 'adc');
-                nodes.filter(node => node.type?.includes('adc-controller')).forEach(node => {
-                    const adc = new TreeInfoItem(element, node.uniqueName);
-                    adc.path = node.path;
-                    adc.tooltip = node.path;
-                    nodes
-                    .filter(n => n.property('io-channels')?.entries?.some(entry => (entry.target instanceof PHandle) && entry.target.is(node)))
-                    .map(usr => {
-                        const channels = usr.property('io-channels').entries.find(c => c.target.is(node));
-                        return {node: usr, idx: channels.cells[0]?.val ?? -1};
-                    })
-                    .sort((a, b) => a.idx - b.idx)
-                    .forEach(channel => {
-                        const entry = new TreeInfoItem(element, `Channel ${channel.idx}`, undefined, channel.node.uniqueName);
-                        entry.path = channel.node.path;
-                        adc.addChild(entry);
-                    });
-
-                    if (!adc.children.length) {
-                        adc.addChild(new TreeInfoItem(element, '', undefined, 'No channels in use.'));
-                    }
-
-                    adcs.addChild(adc);
-                });
-
-                if (adcs.children.length === 1) {
-                    adcs.children[0].icon = adcs.icon;
-                    adcs.children[0].description = adcs.children[0].name;
-                    adcs.children[0].name = adcs.name;
-                    details.addChild(adcs.children[0]);
-                } else if (adcs.children.length) {
-                    details.addChild(adcs);
-                }
-
-                /////////////////////////////
-                if (details.children.length) {
-                    return [details, ...element.files];
-                }
-
-                return element.files;
+                return this.getOverviewTree(element);
             }
 
             if (element instanceof DTSFile) {
@@ -448,6 +198,260 @@ export class DTSTreeView implements
             console.log(e);
             return [];
         }
+    }
+
+    private getOverviewTree(ctx: DTSCtx): vscode.ProviderResult<DTSTreeItem[]> {
+        const details = new TreeInfoItem(ctx, 'Overview');
+        const nodes = ctx.nodeArray();
+        const gpio = new TreeInfoItem(ctx, 'GPIO', 'gpio');
+        nodes.filter(n => n.pins).forEach((n, _, all) => {
+            const controller = new TreeInfoItem(ctx, n.uniqueName);
+            n.pins.forEach((p, i) => {
+                if (p) {
+                    const pin = new TreeInfoItem(ctx, `Pin ${i.toString()}`);
+                    pin.path = p.prop.path;
+                    pin.tooltip = p.prop.entry.node.path + p.prop.name;
+                    pin.description = `${p.prop.entry.node.uniqueName} • ${p.prop.name}`;
+                    controller.addChild(pin);
+                }
+            });
+
+            controller.path = n.path;
+            controller.description = n.pins.length + ' pins';
+            if (!controller.children.length) {
+                controller.description += ' - Nothing connected';
+            } else if (controller.children.length < n.pins.length) {
+                const unconnected = new TreeInfoItem(ctx, '');
+                unconnected.description = `${n.pins.length - controller.children.length} unused pins`;
+                controller.addChild(unconnected);
+            }
+
+            gpio.addChild(controller);
+        });
+
+        if (gpio.children.length) {
+            details.addChild(gpio);
+        }
+
+        const flash = new TreeInfoItem(ctx, 'Flash', 'flash');
+        const sizeString = size => {
+            const spec = [
+                { size: 1024 * 1024, name: 'MB' },
+                { size: 1024, name: 'kB' },
+                { size: 1, name: 'B' },
+            ].find(spec => size > spec.size);
+
+            if (size % spec.size) {
+                return (size / spec.size).toFixed(3) + ' ' + spec.name;
+            }
+
+            return (size / spec.size).toString() + ' ' + spec.name;
+        };
+
+        nodes
+            .filter(n => n.parent && (n.type?.name === 'fixed-partitions' || n.type.includes('fixed-partitions')))
+            .forEach((n, _, all) => {
+                let parent = flash;
+                if (all.length > 1) {
+                    parent = new TreeInfoItem(ctx, n.parent.uniqueName);
+                    flash.addChild(parent);
+                }
+
+                const regs = n.parent.regs();
+                const capacity = regs?.[0]?.sizes[0]?.val;
+                if (capacity !== undefined) {
+                    parent.description = sizeString(capacity);
+                }
+
+                parent.path = n.parent.path;
+
+                let offset = 0;
+                n.children().filter(c => c.regs()?.[0]?.addrs.length === 1).sort((a, b) => (a.regs()[0].addrs[0]?.val ?? 0) - (b.regs()[0].addrs[0]?.val ?? 0)).forEach(c => {
+                    const reg = c.regs();
+                    const start = reg[0].addrs[0].val;
+                    const size = reg[0].sizes?.[0]?.val ?? 0;
+                    if (start > offset) {
+                        parent.addChild(new TreeInfoItem(ctx, `Free space @ 0x${offset.toString(16)}`, undefined, sizeString(start - offset)));
+                    }
+
+                    const partition = new TreeInfoItem(ctx, c.property('label')?.value?.[0]?.val as string ?? c.uniqueName);
+                    partition.description = sizeString(size);
+                    if (start < offset) {
+                        partition.description += ` - ${sizeString(offset - start)} overlap!`;
+                    }
+                    partition.tooltip = `0x${start.toString(16)} - 0x${(start + size - 1).toString(16)}`;
+                    partition.path = c.path;
+
+                    const startItem = new TreeInfoItem(ctx, 'Start', undefined, reg[0].addrs[0].toString(true));
+                    partition.addChild(startItem);
+
+                    if (size) {
+                        const sizeItem = new TreeInfoItem(ctx, 'Size', undefined, reg[0].sizes[0].toString(true));
+                        partition.addChild(sizeItem);
+                    }
+
+                    parent.addChild(partition);
+                    offset = start + size;
+                });
+
+                if (capacity !== undefined && offset !== capacity) {
+                    parent.addChild(new TreeInfoItem(ctx, `Free space @ 0x${offset.toString(16)}`, undefined, sizeString(capacity - offset)));
+                }
+            });
+
+        if (flash.children.length) {
+            details.addChild(flash);
+        }
+
+        const interrupts = new TreeInfoItem(ctx, 'Interrupts', 'interrupts');
+        const controllers = nodes.filter(n => n.property('interrupt-controller'));
+        const controllerItems = controllers.map(n => ({ item: new TreeInfoItem(ctx, n.uniqueName), children: new Array<{ node: Node, interrupts: Property }>() }));
+        nodes.filter(n => n.property('interrupts')).forEach(n => {
+            const interrupts = n.property('interrupts');
+            let node = n;
+            let interruptParent: Property;
+            while (node && !(interruptParent = node.property('interrupt-parent'))) {
+                node = node.parent;
+            }
+
+            if (!interruptParent?.pHandle) {
+                return;
+            }
+
+            const ctrlIdx = controllers.findIndex(c => interruptParent.pHandle?.is(c));
+            if (ctrlIdx < 0) {
+                return;
+            }
+
+            controllerItems[ctrlIdx].children.push({ node: n, interrupts });
+        });
+
+        controllerItems.filter(c => c.children.length).forEach((controller, i) => {
+            const cells = controllers[i]?.type.cells('interrupt') as string[];
+            controller.children.sort((a, b) => a.interrupts.array?.[0] - b.interrupts.array?.[0]).forEach(child => {
+                const childIrqs = child.interrupts.arrays;
+                const irqNames = child.node.property('interrupt-names')?.stringArray;
+                childIrqs.forEach((cellValues, i, all) => {
+                    const irq = new TreeInfoItem(ctx, child.node.uniqueName);
+                    irq.path = child.node.path;
+                    irq.tooltip = child.node.path;
+
+                    // Some nodes have more than one interrupt:
+                    if (all.length > 1) {
+                        irq.name += ` (${irqNames?.[i] ?? i})`;
+                    }
+
+                    const prioIdx = cells.indexOf('priority');
+                    if (cellValues && prioIdx >= 0) {
+                        irq.description = 'Priority: ' + cellValues[prioIdx].toString();
+                    }
+
+                    cells?.forEach((cell, i) => irq.addChild(new TreeInfoItem(ctx, cell.replace(/^\w/, letter => letter.toUpperCase()) + ':', undefined, cellValues?.[i]?.toString() ?? 'N/A')));
+                    controller.item.addChild(irq);
+                });
+            });
+
+            controller.item.path = controllers[i].path;
+
+            if (controllers.length > 1) {
+                interrupts.addChild(controller.item);
+            } else {
+                // Skip second depth if there's just one interrupt controller
+                controller.item.description = controller.item.name;
+                controller.item.name = interrupts.name;
+                controller.item.icon = interrupts.icon;
+                details.addChild(controller.item);
+            }
+        });
+
+        if (interrupts.children.length) {
+            details.addChild(interrupts);
+        }
+
+        const buses = new TreeInfoItem(ctx, 'Buses', 'bus');
+        nodes.filter(node => node.type?.bus).forEach(node => {
+            const bus = new TreeInfoItem(ctx, node.uniqueName);
+            if (!bus.name.toLowerCase().includes(node.type.bus.toLowerCase())) {
+                bus.description = node.type.bus;
+            }
+
+            bus.path = node.path;
+            bus.tooltip = node.path;
+            node.children().forEach(child => {
+                const busEntry = new TreeInfoItem(ctx, child.localUniqueName);
+                busEntry.path = child.path;
+                busEntry.tooltip = child.path;
+                if (child.address !== undefined) {
+                    busEntry.description = `@ 0x${child.address.toString(16)}`;
+
+                    // SPI nodes have chip selects
+                    if (node.type.bus === 'spi') {
+                        const csGpios = node.property('cs-gpios');
+                        const cs = csGpios?.entries?.[child.address];
+                        if (cs) {
+                            const csEntry = new TreeInfoItem(ctx, `Chip select`);
+                            csEntry.description = `${cs.target.toString(true)} ${cs.cells.map(c => c.toString(true)).join(' ')}`;
+                            csEntry.path = csGpios.path;
+                            busEntry.addChild(csEntry);
+                        }
+                    }
+                }
+
+                bus.addChild(busEntry);
+
+            });
+
+            if (!bus.children.length) {
+                bus.description = (bus.description ? bus.description + ' ' : '') + '• Nothing connected';
+            }
+
+            buses.addChild(bus);
+        });
+
+        if (buses.children.length) {
+            details.addChild(buses);
+        }
+
+        const adcs = new TreeInfoItem(ctx, 'ADCs', 'adc');
+        nodes.filter(node => node.type?.includes('adc-controller')).forEach(node => {
+            const adc = new TreeInfoItem(ctx, node.uniqueName);
+            adc.path = node.path;
+            adc.tooltip = node.path;
+            nodes
+            .filter(n => n.property('io-channels')?.entries?.some(entry => (entry.target instanceof PHandle) && entry.target.is(node)))
+            .map(usr => {
+                const channels = usr.property('io-channels').entries.find(c => c.target.is(node));
+                return {node: usr, idx: channels.cells[0]?.val ?? -1};
+            })
+            .sort((a, b) => a.idx - b.idx)
+            .forEach(channel => {
+                const entry = new TreeInfoItem(ctx, `Channel ${channel.idx}`, undefined, channel.node.uniqueName);
+                entry.path = channel.node.path;
+                adc.addChild(entry);
+            });
+
+            if (!adc.children.length) {
+                adc.addChild(new TreeInfoItem(ctx, '', undefined, 'No channels in use.'));
+            }
+
+            adcs.addChild(adc);
+        });
+
+        if (adcs.children.length === 1) {
+            adcs.children[0].icon = adcs.icon;
+            adcs.children[0].description = adcs.children[0].name;
+            adcs.children[0].name = adcs.name;
+            details.addChild(adcs.children[0]);
+        } else if (adcs.children.length) {
+            details.addChild(adcs);
+        }
+
+        /////////////////////////////
+        if (details.children.length) {
+            return [details, ...ctx.files];
+        }
+
+        return ctx.files;
     }
 
     getParent(element: DTSTreeItem): vscode.ProviderResult<DTSCtx> {

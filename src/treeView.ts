@@ -364,7 +364,7 @@ export class DTSTreeView implements
             controller.children.sort((a, b) => a.interrupts.array?.[0] - b.interrupts.array?.[0]).forEach(child => {
                 const childIrqs = child.interrupts.arrays;
                 const irqNames = child.node.property('interrupt-names')?.stringArray;
-                childIrqs.forEach((cellValues, i, all) => {
+                childIrqs?.forEach((cellValues, i, all) => {
                     const irq = new TreeInfoItem(ctx, child.node.uniqueName);
                     irq.path = child.node.path;
                     irq.tooltip = child.node.path;
@@ -375,8 +375,8 @@ export class DTSTreeView implements
                     }
 
                     const prioIdx = cells.indexOf('priority');
-                    if (cellValues && prioIdx >= 0) {
-                        irq.description = 'Priority: ' + cellValues[prioIdx].toString();
+                    if (cellValues?.length > prioIdx) {
+                        irq.description = 'Priority: ' + cellValues[prioIdx]?.toString();
                     }
 
                     cells?.forEach((cell, i) => irq.addChild(new TreeInfoItem(ctx, cell.replace(/^\w/, letter => letter.toUpperCase()) + ':', undefined, cellValues?.[i]?.toString() ?? 'N/A')));

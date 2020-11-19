@@ -440,6 +440,28 @@ function lintNode(node: Node, ctx: LintCtx) {
         });
     }
 
+    // STM32 pinmux:
+    props.filter(p => p.name.match(/^pinctrl(-\d+)?/) && p.pHandles).forEach(prop => {
+        prop.pHandles.map(handle => ctx.ctx.node(handle.val)).filter(n => n?.property('pinmux')?.number !== undefined).forEach(pinmux => {
+            const bitfield = pinmux.property('pinmux').number;
+            const port = (bitfield >> 12);
+            const pin = (bitfield >> 8) & 0x0f;
+            const controller = ctx.gpioControllers?.[port];
+            if (!controller) {
+                return;
+            }
+
+            if (pin > controller.pins?.length) {
+                ctx.diags.pushLoc(prop.loc, `No pin ${pin} of ${controller.uniqueName}`, vscode.DiagnosticSeverity.Warning);
+            } else if (controller.pins?.[pin]) {
+                const diag = ctx.diags.pushLoc(prop.loc, `Pin ${pin} of ${controller.uniqueName} already assigned to ${controller.pins[pin].prop.entry.node.path}${controller.pins[pin].prop.name}`, vscode.DiagnosticSeverity.Information);
+                diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(controller.pins[pin].prop.loc, "Overlapping assignment")];
+            } else {
+                controller.pins[pin] = { prop, cells: [], pinmux };
+            }
+        });
+    });
+
     if (!node.type) {
         node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Unknown node type`));
         return; // !!! The rest of the block depends on the type being resolved
@@ -484,29 +506,6 @@ function lintNode(node: Node, ctx: LintCtx) {
 
         ctx.gpioControllers.push(node);
     }
-
-    // STM32 pinmux:
-    props.filter(p => p.name.match(/^pinctrl(-\d+)?/) && p.pHandles).forEach(prop => {
-        prop.pHandles.map(handle => ctx.ctx.node(handle.val)).filter(n => n?.property('pinmux')?.number !== undefined).forEach(pinmux => {
-            const bitfield = pinmux.property('pinmux').number;
-            const port = (bitfield >> 12);
-            const pin = (bitfield >> 8) & 0x0f;
-            const controller = ctx.gpioControllers?.[port];
-            if (!controller) {
-                return;
-            }
-
-            if (pin > controller.pins?.length) {
-                ctx.diags.pushLoc(prop.loc, `No pin ${pin} of ${controller.uniqueName}`, vscode.DiagnosticSeverity.Warning);
-            } else if (controller.pins?.[pin]) {
-                const diag = ctx.diags.pushLoc(prop.loc, `Pin ${pin} of ${controller.uniqueName} already assigned to ${controller.pins[pin].prop.entry.node.path}${controller.pins[pin].prop.name}`, vscode.DiagnosticSeverity.Information);
-                diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(controller.pins[pin].prop.loc, "Overlapping assignment")];
-            } else {
-                controller.pins[pin] = { prop, cells: [], pinmux };
-            }
-        });
-
-    });
 
     if (node.parent?.type?.bus) {
         if (!node.type?.onBus) {

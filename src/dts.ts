@@ -99,17 +99,23 @@ export class Expression extends IntValue {
         let level = 1;
         let text = '(';
         while (level !== 0) {
-            m = state.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+/*-]|\s*|0x[\da-fA-F]+|[\d.]+)\s*)*([()])/);
+            m = state.match(/^(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+/*-]|\s*|0x[\da-fA-F]+|[\d.]+|'.')\s*)*([()])/);
             if (!m) {
                 state.pushDiag(`Unterminated expression`, vscode.DiagnosticSeverity.Error);
                 break;
             }
-            text += m[0];
+
+            // JS doesn't support single-character arithmetic, so we need to convert those to numbers first:
+            const part = m[0].replace(/'(.)'/g, (_, char: string) => char.charCodeAt(0).toString());
+
+            text += part;
             if (m[1] === '(') {
                 level++;
             } else {
                 level--;
             }
+
+            state.skipWhitespace();
         }
 
         const loc = state.location(start);

@@ -401,7 +401,7 @@ export class TypeLoader {
 
     constructor() {
         this.diags = new DiagnosticsSet();
-        this.baseType = new AbstractNodeType({ name: '<unknown>' });
+        this.baseType = new AbstractNodeType({ name: '<unknown>', properties: { ...standardProperties } });
         this.types = {};
         standardTypes.forEach(type => this.addType(type));
     }
@@ -479,7 +479,7 @@ export class TypeLoader {
         let types = getBaseType();
 
         if (!types.length) {
-            types = [new AbstractNodeType({ name: '<unknown>', properties: { ...standardProperties } })];
+            types = [this.baseType];
         }
 
         if (node.parent?.type && types.length > 1) {

@@ -1529,7 +1529,8 @@ class DTSEngine implements
         return [new vscode.TextEdit(range, text)];
     }
 
-    provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.DocumentLink[]> {
+    async provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.DocumentLink[]> {
+        await this.parser.stable();
         return this.parser.file(document.uri)?.includes.filter(i => i.loc.uri.fsPath === document.uri.fsPath).map(i => {
             const link = new vscode.DocumentLink(i.loc.range, i.dst);
             link.tooltip = i.dst.fsPath;

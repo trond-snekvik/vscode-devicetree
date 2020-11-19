@@ -11,10 +11,9 @@
 			"presentation": {
 				"reveal": "never"
 			},
-			"group": {
-				"kind": "build",
-				"isDefault": true
-			}
+			"group": "build",
+			"label": "npm: watch",
+			"detail": "tsc -watch -p ./"
 		},
 		{
 			"type": "npm",
@@ -22,6 +21,17 @@
 			"problemMatcher": "$eslint-compact",
 			"isBackground": false,
 			"group": "build"
+		},
+		{
+			"type": "npm",
+			"script": "webpack",
+			"problemMatcher": [],
+			"label": "npm: webpack",
+			"detail": "webpack --mode development",
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			}
 		}
 	]
 }

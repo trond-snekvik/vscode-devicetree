@@ -1464,7 +1464,7 @@ export class Node {
     }
 
     toString(expandChildren=false, indent='') {
-        let result = indent + this.fullName + ' {\n';
+        let result = indent + this.labels().map(label => `${label}: `).join('') + this.fullName + ' {\n';
         indent += '    ';
 
         const props = this.uniqueProperties();

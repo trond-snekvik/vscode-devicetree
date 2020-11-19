@@ -306,6 +306,32 @@ export class DTSTreeView implements
                 }
             });
 
+        // Some devices don't have partitions defined. For these, show simple flash entries:
+        if (!flash.children.length) {
+            nodes.filter(n => n.type?.is('soc-nv-flash')).forEach((n, _, all) => {
+                let parent = flash;
+                if (all.length > 1) {
+                    parent = new TreeInfoItem(ctx, n.uniqueName);
+                    flash.addChild(parent);
+                }
+
+                parent.path = n.path;
+
+                n.regs()?.filter(reg => reg.addrs.length === 1 && reg.sizes.length === 1).forEach((reg, i, areas) => {
+                    let area = parent;
+                    if (areas.length > 1) {
+                        area = new TreeInfoItem(ctx, `Area ${i+1}`);
+                        parent.addChild(area);
+                    }
+
+                    area.description = sizeString(reg.sizes[0].val);
+
+                    area.addChild(new TreeInfoItem(ctx, 'Start', undefined, reg.addrs[0].toString(true)));
+                    area.addChild(new TreeInfoItem(ctx, 'Size', undefined, sizeString(reg.sizes[0].val)));
+                });
+            });
+        }
+
         if (flash.children.length) {
             details.addChild(flash);
         }

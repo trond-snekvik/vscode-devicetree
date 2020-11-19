@@ -132,8 +132,8 @@ export class Expression extends IntValue {
 }
 
 export class ArrayValue extends PropertyValue {
-    val: (PHandle | IntValue)[];
-    private constructor(value: (PHandle | IntValue)[], loc: vscode.Location) {
+    val: (PHandle | IntValue | Expression)[];
+    private constructor(value: (PHandle | IntValue | Expression)[], loc: vscode.Location) {
         super(value, loc);
     }
 
@@ -145,7 +145,7 @@ export class ArrayValue extends PropertyValue {
         }
 
         const elems = [IntValue, PHandle, Expression];
-        const values: (PHandle | IntValue)[] = [];
+        const values: (PHandle | IntValue | Expression)[] = [];
 
         while (state.skipWhitespace() && !state.match(/^>/)) {
             let match: PHandle | IntValue | Expression | undefined;
@@ -869,7 +869,7 @@ export class Property {
             return;
         }
 
-        const entries = new Array<{ target: PHandle, cells: IntValue[] }>();
+        const entries = new Array<{ target: PHandle, cells: (IntValue | Expression)[] }>();
 
         val.forEach(v => {
             let i = 0;
@@ -888,7 +888,7 @@ export class Property {
                     break;
                 }
 
-                entries.push({ target, cells: <IntValue[]>cells });
+                entries.push({ target, cells: <(IntValue | Expression)[]>cells });
                 i += count;
             }
         });

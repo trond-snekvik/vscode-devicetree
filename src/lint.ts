@@ -28,6 +28,9 @@ function countText(count: number, text: string, plural?: string): string {
 function lintNode(node: Node, ctx: LintCtx) {
     const props = node.uniqueProperties();
 
+    // Reset node pins in case they end up being removed:
+    node.pins = undefined;
+
     props.forEach(prop => {
         // special properties:
         if (prop.name === 'reg') {

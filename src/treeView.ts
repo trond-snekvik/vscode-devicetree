@@ -479,6 +479,37 @@ export class DTSTreeView implements
             details.addChild(adcs);
         }
 
+        const clocks = new TreeInfoItem(ctx, 'Clocks', 'clock');
+        nodes.filter(node => node.type?.is('clock-controller')).forEach(node => {
+            const clock = new TreeInfoItem(ctx, node.uniqueName);
+            clock.path = node.path;
+            const cells = node.type?.cells('clock');
+            nodes.forEach(user => {
+                const clockProp = user.property('clocks');
+                const entries = clockProp?.entries?.filter(e => e.target.is(node));
+                entries?.forEach(e => {
+                    const userEntry = new TreeInfoItem(ctx, user.uniqueName);
+                    userEntry.path = user.path;
+                    cells?.forEach((c, i) => {
+                        if (i < e.cells.length) {
+                            userEntry.addChild(new TreeInfoItem(ctx, c, undefined, e.cells[i].toString(true)));
+                        }
+                    });
+                    clock.addChild(userEntry);
+                });
+            });
+
+            if (!clock.children.length) {
+                clock.addChild(new TreeInfoItem(ctx, '', undefined, 'No users'));
+            }
+
+            clocks.addChild(clock);
+        });
+
+        if (clocks.children.length) {
+            details.addChild(clocks);
+        }
+
         /////////////////////////////
         if (details.children.length) {
             return [details, ...ctx.files];

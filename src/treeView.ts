@@ -506,7 +506,12 @@ export class DTSTreeView implements
             clocks.addChild(clock);
         });
 
-        if (clocks.children.length) {
+        if (clocks.children.length === 1) {
+            clocks.children[0].icon = clocks.icon;
+            clocks.children[0].description = clocks.children[0].name;
+            clocks.children[0].name = clocks.name;
+            details.addChild(clocks.children[0]);
+        } else if (clocks.children.length) {
             details.addChild(clocks);
         }
 

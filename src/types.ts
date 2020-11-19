@@ -86,6 +86,11 @@ export class NodeType {
         return this._cells[type] ?? this.inclusions.find(i => i.cells(type))?.cells(type);
     }
 
+    /// Whether this type matches the given type string, either directly or through inclusions
+    is(type: string): boolean {
+        return this.name === type || !!this.includes(type);
+    }
+
     get bus(): string {
         return this._bus ?? this.inclusions.find(i => i.bus)?.bus;
     }

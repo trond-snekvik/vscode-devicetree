@@ -258,7 +258,7 @@ export class DTSTreeView implements
         };
 
         nodes
-            .filter(n => n.parent && (n.type?.name === 'fixed-partitions' || n.type.includes('fixed-partitions')))
+            .filter(n => n.parent && n.type.is('fixed-partitions'))
             .forEach((n, _, all) => {
                 let parent = flash;
                 if (all.length > 1) {
@@ -446,7 +446,7 @@ export class DTSTreeView implements
         }
 
         const adcs = new TreeInfoItem(ctx, 'ADCs', 'adc');
-        nodes.filter(node => node.type?.includes('adc-controller')).forEach(node => {
+        nodes.filter(node => node.type?.is('adc-controller')).forEach(node => {
             const adc = new TreeInfoItem(ctx, node.uniqueName);
             adc.path = node.path;
             adc.tooltip = node.path;

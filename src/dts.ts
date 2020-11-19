@@ -1336,7 +1336,7 @@ export class Node {
     address?: number;
     type?: NodeType;
     entries: NodeEntry[];
-    pins?: {prop: Property, cells: IntValue[]}[];
+    pins?: {prop: Property, cells: IntValue[], pinmux?: Node}[];
 
     constructor(name: string, address?: string, parent?: Node) {
         if (address) {

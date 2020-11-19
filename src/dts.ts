@@ -1508,6 +1508,10 @@ export class DTSCtx {
             folder = path.dirname(folder);
         }
 
+        if (vscode.workspace.workspaceFolders?.find(workspace => workspace.uri.fsPath === folder)) {
+            return path.basename(uri.fsPath, path.extname(uri.fsPath));
+        }
+
         return vscode.workspace.asRelativePath(folder) + ': ' + path.basename(uri.fsPath, path.extname(uri.fsPath));
     }
 

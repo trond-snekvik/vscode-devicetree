@@ -226,8 +226,9 @@ export class DTSTreeView implements
             controller.path = n.path;
             controller.description = n.pins.length + ' pins';
             if (!controller.children.length) {
-                controller.description += ' - Nothing connected';
+                controller.description += ' • Nothing connected';
             } else if (controller.children.length < n.pins.length) {
+                controller.description += ` • ${controller.children.length} in use`;
                 const unconnected = new TreeInfoItem(ctx, '');
                 unconnected.description = `${n.pins.length - controller.children.length} unused pins`;
                 controller.addChild(unconnected);
@@ -243,10 +244,11 @@ export class DTSTreeView implements
         const flash = new TreeInfoItem(ctx, 'Flash', 'flash');
         const sizeString = size => {
             const spec = [
+                { size: 1024 * 1024 * 1024, name: 'GB' },
                 { size: 1024 * 1024, name: 'MB' },
                 { size: 1024, name: 'kB' },
                 { size: 1, name: 'B' },
-            ].find(spec => size > spec.size);
+            ].find(spec => size >= spec.size);
 
             if (size % spec.size) {
                 return (size / spec.size).toFixed(3) + ' ' + spec.name;
@@ -289,12 +291,10 @@ export class DTSTreeView implements
                     partition.tooltip = `0x${start.toString(16)} - 0x${(start + size - 1).toString(16)}`;
                     partition.path = c.path;
 
-                    const startItem = new TreeInfoItem(ctx, 'Start', undefined, reg[0].addrs[0].toString(true));
-                    partition.addChild(startItem);
+                    partition.addChild(new TreeInfoItem(ctx, 'Start', undefined, reg[0].addrs[0].toString(true)));
 
                     if (size) {
-                        const sizeItem = new TreeInfoItem(ctx, 'Size', undefined, reg[0].sizes[0].toString(true));
-                        partition.addChild(sizeItem);
+                        partition.addChild(new TreeInfoItem(ctx, 'Size', undefined, sizeString(reg[0].sizes[0].val)));
                     }
 
                     parent.addChild(partition);

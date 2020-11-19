@@ -24,9 +24,9 @@ export class Macro {
         let insertText: string;
         let match: RegExpExecArray;
         const result = new Array<MacroInstance>();
-        const tag = this.args ? `${this.name}\\s*\\(` : this.name;
+        const tag = this.args ? `${this.name}\\s*\\(` : this.name + '\\b';
 
-        let regex = new RegExp(`(?<!#)#${tag}|\\b${tag}\\b`, 'g');
+        let regex = new RegExp(`(?<!#)#${tag}|\\b${tag}`, 'g');
         while ((match = regex.exec(text))) {
             if (insertText === undefined) {
                 const otherDefines = defines.filter(d => d !== this);
@@ -35,7 +35,7 @@ export class Macro {
                     macros.push(...d.find(this.value, otherDefines, loc, true));
                 });
 
-                insertText = MacroInstance.process(this.value, macros);
+                insertText = MacroInstance.process(this.value, MacroInstance.filterOverlapping(macros));
             }
 
             const replaceText = match[0].startsWith('#') ? `"${insertText}"` : insertText;
@@ -91,7 +91,7 @@ export class Macro {
                     defines.forEach(d => {
                         macros.push(...d.find(a, defines, loc, true));
                     });
-                    return new Macro(this.args[i], MacroInstance.process(a, macros));
+                    return new Macro(this.args[i], MacroInstance.process(a, MacroInstance.filterOverlapping(macros)));
                 }).filter(arg => arg !== undefined);
 
                 macroArgs.push(varArgs);
@@ -104,7 +104,7 @@ export class Macro {
                 macroArgs.forEach(arg => {
                     macros.push(...arg.find(replaceText, macroArgs, loc, true));
                 });
-                result.push(new MacroInstance(this, raw, MacroInstance.process(replaceText, macros), match.index));
+                result.push(new MacroInstance(this, raw, MacroInstance.process(replaceText, MacroInstance.filterOverlapping(macros)), match.index));
             } else {
                 result.push(new MacroInstance(this, match[0], replaceText, match.index));
             }
@@ -172,14 +172,18 @@ export class MacroInstance {
     start: number;
     macro: Macro;
 
-    static process(text: string, macros: MacroInstance[]) {
+    static filterOverlapping(macros: MacroInstance[]) {
         let prev: MacroInstance = null;
-        macros = macros.sort((a, b) => a.start - b.start).filter(m => {
+        return macros.sort((a, b) => a.start - b.start).filter(m => {
             const result = !prev || (m.start >= prev.start + prev.raw.length);
-            prev = m;
+            if (result) {
+                prev = m;
+            }
             return result;
         });
+    }
 
+    static process(text: string, macros: MacroInstance[]) {
         // Replace values from back to front:
         macros.sort((a, b) => b.start - a.start).forEach(m => {
             text = text.slice(0, m.start) + m.insert + text.slice(m.start + m.raw.length);
@@ -258,7 +262,7 @@ export async function preprocess(doc: vscode.TextDocument, macros: Macro[], incl
             const directive = text.match(/^\s*#\s*(\w+)/);
             if (directive) {
                 while (text.endsWith('\\') && rawLines.length) {
-                    text = text.slice(0, text.length) + rawLines.splice(0, 1)[0].text;
+                    text = text.slice(0, text.length - 1) + ' ' + rawLines.splice(0, 1)[0].text;
                 }
 
                 let value =  text.match(/^\s*#\s*(\w+)\s*(.*)/)[2].trim();

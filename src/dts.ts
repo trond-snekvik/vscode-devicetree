@@ -434,9 +434,9 @@ export class Line {
     constructor(raw: string, number: number, uri: vscode.Uri, macros: MacroInstance[]=[]) {
         this.raw = raw;
         this.number = number;
-        this.macros = macros.sort((a, b) => a.start - b.start);
+        this.macros = MacroInstance.filterOverlapping(macros);
         this.location = new vscode.Location(uri, new vscode.Range(this.number, 0, this.number, this.raw.length));
-        this.text = MacroInstance.process(raw, macros);
+        this.text = MacroInstance.process(raw, this.macros);
     }
 }
 
@@ -535,18 +535,12 @@ class ParserState {
     }
 
     private replaceDefines(text: string, loc: vscode.Location) {
-        let macros = new Array<MacroInstance>();
+        const macros = new Array<MacroInstance>();
         this.macros.filter(d => !d.undef).forEach(d => {
             macros.push(...d.find(text, this.macros, loc));
         });
-        let prev: MacroInstance = null;
-        macros = macros.sort((a, b) => a.start - b.start).filter(m => {
-            const result = !prev || (m.start >= prev.start + prev.raw.length);
-            prev = m;
-            return result;
-        });
 
-        return MacroInstance.process(text, macros);
+        return MacroInstance.process(text, MacroInstance.filterOverlapping(macros));
     }
 
     evaluate(text: string, loc: vscode.Location): any {

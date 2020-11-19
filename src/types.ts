@@ -281,7 +281,6 @@ const standardTypes = [
     new NodeType({
         name: '/cpus/',
         title: '/cpus',
-        valid: true,
         description: `A /cpus node is required for all devicetrees. It does not represent a real device in the system, but acts as a container for child cpu nodes which represent the systems CPUs.`,
         properties: {
             '#address-cells': {
@@ -295,7 +294,6 @@ const standardTypes = [
     new NodeType({
         name: '/cpus/cpu',
         title: 'CPU instance',
-        valid: true,
         description: 'A cpu node represents a hardware execution block that is sufficiently independent that it is capable of running an operating\n' +
         'system without interfering with other CPUs possibly running other operating systems.\n' +
         'Hardware threads that share an MMU would generally be represented under one cpu node. If other more complex CPU\n' +
@@ -325,7 +323,6 @@ const standardTypes = [
     new NodeType({
         name: '/chosen/',
         title: '/Chosen node',
-        valid: true,
         description: `The /chosen node does not represent a real device in the system but describes parameters chosen or specified by the system firmware at run time. It shall be a child of the root node`,
         properties: {
             'zephyr,flash': {

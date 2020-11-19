@@ -1070,9 +1070,9 @@ class DTSEngine implements
         const line = document.getText(lineRange);
         const before = line.slice(0, position.character);
 
-        const labelItems = (asNode: boolean) => {
+        const labelItems = (type: 'node' | 'cell' | 'ref', filter: (node: dts.Node) => boolean = _ => true, prop?: string) => {
             const labels: {label: string, node: dts.Node, type?: types.NodeType}[] = [];
-            file.ctx.nodeArray().forEach(node => {
+            file.ctx.nodeArray().filter(filter).forEach(node => {
                 const type = this.types.nodeType(node);
                 labels.push(...node.labels().map(label => { return { label, node, type }; }));
             });
@@ -1081,10 +1081,16 @@ class DTSEngine implements
 
             return labels.map(l => {
                 const completion = new vscode.CompletionItem(`&${l.label}`, vscode.CompletionItemKind.Class);
-                if (asNode) {
+                if (type === 'node') {
                     completion.insertText = new vscode.SnippetString((withAmp ? completion.label : l.label) + ' {\n\t');
                     completion.insertText.appendTabstop();
                     completion.insertText.appendText('\n};\n');
+                } else if (type === 'cell' && prop) {
+                    completion.insertText = new vscode.SnippetString((withAmp ? completion.label : l.label));
+                    l.node.refCellNames(prop)?.forEach(cell => {
+                        (<vscode.SnippetString>completion.insertText).appendText(' ');
+                        (<vscode.SnippetString>completion.insertText).appendPlaceholder(cell);
+                    });
                 } else if (!withAmp) {
                     completion.insertText = l.label;
                 }
@@ -1108,9 +1114,9 @@ class DTSEngine implements
         if (deleteLine) {
             if (deleteLine[1] === 'node') {
                 if (node) {
-                    return [...node.children().map(n => new vscode.CompletionItem(n.fullName, vscode.CompletionItemKind.Class)), ...labelItems(false)];
+                    return [...node.children().map(n => new vscode.CompletionItem(n.fullName, vscode.CompletionItemKind.Class)), ...labelItems('ref')];
                 } else {
-                    return labelItems(false);
+                    return labelItems('ref');
                 }
             } else if (node) {
                 return node.uniqueProperties().map(p => new vscode.CompletionItem(p.name, vscode.CompletionItemKind.Property));
@@ -1146,7 +1152,7 @@ class DTSEngine implements
 
         if (!node) {
             if (before.match(/&[\w-]*$/)) {
-                return labelItems(true);
+                return labelItems('node');
             }
 
             const root = new vscode.CompletionItem('/', vscode.CompletionItemKind.Class);
@@ -1157,7 +1163,7 @@ class DTSEngine implements
             root.documentation = 'The devicetree has a single root node of which all other device nodes are descendants. The full path to the root node is /.';
             root.preselect = true;
 
-            return [root, ...labelItems(true), ...macros];
+            return [root, ...labelItems('node'), ...macros];
         }
 
         const propValueTemplate = (value: string, propType: string | string[]) => {
@@ -1217,7 +1223,8 @@ class DTSEngine implements
 
                 const ref = before.match(/&([\w-]*)$/);
                 if (ref) {
-                    return labelItems(false);
+                    const cellName = '#' + dts.cellName(prop.name);
+                    return labelItems('cell', node => !!node.property(cellName), prop.name);
                 }
 
                 if (prop.name === 'compatible') {
@@ -1241,7 +1248,7 @@ class DTSEngine implements
         }
 
         if (before.match(/&[\w-]*$/)) {
-            return labelItems(true);
+            return labelItems('node', n => node.children().includes(n));
         }
 
         const nodeProps = node.properties();

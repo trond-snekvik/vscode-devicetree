@@ -749,6 +749,15 @@ class DTSEngine implements
         if (line) {
             const m = line.macros.find(m => position.character >= m.start && position.character < m.start + m.raw.length);
             if (m) {
+                const singleLineVal = `#define ${m.raw} ${m.insert}`;
+                if (singleLineVal.length > 80) { // Spread across two lines:
+                    let value = `#define ${m.raw}`;
+                    value += ' '.repeat(80 - value.length);
+                    value += `\\\n\t${m.insert}`;
+                    return new vscode.Hover({ language: 'dts', value });
+
+                }
+
                 return new vscode.Hover({language: 'dts', value: `#define ${m.raw} ${m.insert}`});
             }
         }

@@ -560,6 +560,13 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
                         ctx.diags.pushLoc(e.target.loc, `${e.target.toString()} expects ${countText(count, 'parameter cell')}.`, vscode.DiagnosticSeverity.Error);
                         return;
                     }
+
+                    const mapName = prop.name.slice(0, prop.name.length - 1) + '-map';
+                    const nexusMap = ref.property(mapName);
+                    if (nexusMap && !ref.remap(prop.name, e)) {
+                        ctx.diags.pushLoc(e.target.loc, `${e.target.toString()}'s nexus map does not have any matches for <${e.target.toString(true)} ${e.cells.map(c => c.toString(true)).join(' ')}>.`, vscode.DiagnosticSeverity.Error);
+                        return;
+                    }
                 });
             }
         });

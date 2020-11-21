@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2020 Trond Snekvik
+ *
+ * SPDX-License-Identifier: MIT
+ */
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { DTSCtx, DTSFile, Node, Parser, PHandle, Property} from './dts';
@@ -494,6 +499,40 @@ export class DTSTreeView implements
             details.addChild(adcs.children[0]);
         } else if (adcs.children.length) {
             details.addChild(adcs);
+        }
+
+        const dacs = new TreeInfoItem(ctx, 'DACs', 'dac');
+        nodes.filter(node => node.type?.is('dac-controller')).forEach(node => {
+            const dac = new TreeInfoItem(ctx, node.uniqueName);
+            dac.path = node.path;
+            dac.tooltip = node.type?.description;
+            nodes
+            .filter(n => n.property('io-channels')?.entries?.some(entry => (entry.target instanceof PHandle) && entry.target.is(node)))
+            .flatMap(usr => {
+                const names = usr.property('io-channel-names')?.stringArray ?? [];
+                return usr.property('io-channels').entries.filter(c => c.target.is(node)).map((channel, i, all) => ({node: usr, idx: channel.cells[0]?.val ?? -1, name: names[i] ?? ((all.length > 1) && i.toString())}));
+            })
+            .sort((a, b) => a.idx - b.idx)
+            .forEach(channel => {
+                const entry = new TreeInfoItem(ctx, `Channel ${channel.idx}`, undefined, channel.node.uniqueName + (channel.name ? ` • ${channel.name}` : ''));
+                entry.path = channel.node.path;
+                dac.addChild(entry);
+            });
+
+            if (!dac.children.length) {
+                dac.addChild(new TreeInfoItem(ctx, '', undefined, 'No channels in use.'));
+            }
+
+            dacs.addChild(dac);
+        });
+
+        if (dacs.children.length === 1) {
+            dacs.children[0].icon = dacs.icon;
+            dacs.children[0].description = dacs.children[0].name;
+            dacs.children[0].name = dacs.name;
+            details.addChild(dacs.children[0]);
+        } else if (dacs.children.length) {
+            details.addChild(dacs);
         }
 
         const clocks = new TreeInfoItem(ctx, 'Clocks', 'clock');

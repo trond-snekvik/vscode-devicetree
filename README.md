@@ -4,6 +4,8 @@ DeviceTree language support for the [Zephyr project](https://zephyrproject.org/)
 
 This extension is an independent community contribution, and is not part of the Zephyr Project.
 
+![Code completion](doc/completion.png)
+
 ## Features
 
 - Syntax highlighting
@@ -27,6 +29,7 @@ This extension is an independent community contribution, and is not part of the 
 - Show GPIO pin assignments
 - Manage DeviceTree contexts
 - Format selection
+- Edit in overlay file menu entry
 - Code completion for bindings files (depends on [Red Hat's YAML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml))
 - Linting language rules
   - Redundant properties
@@ -41,8 +44,15 @@ This extension is an independent community contribution, and is not part of the 
   - Name property matches
   - GPIO pin collisions
   - Duplicate labels
-
-![Code completion](doc/completion.png)
+  - Nexus node map entry exists
+- DeviceTree overview
+  - GPIO assignments
+  - Flash partitions
+  - Interrupts
+  - Buses and their nodes
+  - ADC channels
+  - DAC channels
+  - Clock sources
 
 ### Copy C identifiers
 
@@ -65,6 +75,38 @@ The DeviceTree contexts show up in the explorer sidebar:
 The DeviceTree contexts can be saved in a context file by pressing the Save button on the DeviceTree context explorer. This allows you to restore the contexts the next time you open the folder. The location of the context file can be changed by setting the "devicetree.ctxFile" configuration entry in the VS Code settings.
 
 It's possible to add shield files to the same context by pressing "DeviceTree: Add Shield..." on the context in the DeviceTree context explorer. Shield files will be processed ahead of the overlay file.
+
+#### DeviceTree overview
+
+Each DeviceTree context presents an overview over common resources and their users. Each entry in the overview is linked with a specific node or property in the DeviceTree, and pressing them will go to the primary definition to the linked node or property.
+
+![](icons/dark/gpio.svg) **GPIO:**
+
+A list of all known gpio controllers, determined by the `gpio-controller` property. Each GPIO controller presents a list of the allocated pins and their owners, inferred from `gpios` properties, `-pins` properties and STM32 `pinctrl` properties.
+
+![](icons/dark/flash.svg) **Flash**
+
+A list of all flash controllers, i.e. nodes based on the `soc-nv-flash` type binding. If the the flash controllers contain a `fixed-partitions` node, each partition will be listed with their size and address. Any unallocated space in the flash area will also be listed.
+
+![](icons/dark/interrupts.svg) **Interrupts**
+
+A list of all interrupt controllers, determined by the `interrupt-controller` property. Lists the allocated interrupts on the controller and their users, as well as any other available information, such as their priority and index.
+
+![](icons/dark/bus.svg) **Buses**
+
+A list of all known buses on the device, determined by the `bus` entry in the node's type binding. Lists important properties of the bus, such as clock speed and flow control, as well each node on the bus, as well as their address if the bus has an address space. If the bus is an SPI bus, the chip select configuration of each node is also listed if it is known.
+
+![](icons/dark/adc.svg) **ADCs**
+
+A list of all ADC controllers on the device, i.e. nodes based on the `adc-controller` type binding. Each ADC controller contains a list of all allocated channels, based on references made to the ADC instances using the `io-channels` property.
+
+![](icons/dark/dac.svg) **DACs**
+
+A list of all DAC controllers on the device, i.e. nodes based on the `dac-controller` type binding. Each DAC controller contains a list of all allocated channels, based on references made to the DAC instances using the `io-channels` property.
+
+![](icons/dark/clock.svg) **Clocks**
+
+A list of all clock controllers on the device, i.e. nodes based on the `clock-controller` type binding. Each clock controller contains a list of all users of the clock, as well as any additional information, such as clock bus and flags.
 
 ### Bindings files code completion and schema validation
 

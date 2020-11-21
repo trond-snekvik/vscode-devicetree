@@ -469,13 +469,13 @@ export class DTSTreeView implements
             adc.tooltip = node.type?.description;
             nodes
             .filter(n => n.property('io-channels')?.entries?.some(entry => (entry.target instanceof PHandle) && entry.target.is(node)))
-            .map(usr => {
-                const channels = usr.property('io-channels').entries.find(c => c.target.is(node));
-                return {node: usr, idx: channels.cells[0]?.val ?? -1};
+            .flatMap(usr => {
+                const names = usr.property('io-channel-names')?.stringArray ?? [];
+                return usr.property('io-channels').entries.filter(c => c.target.is(node)).map((channel, i, all) => ({node: usr, idx: channel.cells[0]?.val ?? -1, name: names[i] ?? ((all.length > 1) && i.toString())}));
             })
             .sort((a, b) => a.idx - b.idx)
             .forEach(channel => {
-                const entry = new TreeInfoItem(ctx, `Channel ${channel.idx}`, undefined, channel.node.uniqueName);
+                const entry = new TreeInfoItem(ctx, `Channel ${channel.idx}`, undefined, channel.node.uniqueName + (channel.name ? ` • ${channel.name}` : ''));
                 entry.path = channel.node.path;
                 adc.addChild(entry);
             });

@@ -1077,7 +1077,7 @@ class DTSEngine implements
                 labels.push(...node.labels().map(label => { return { label, node, type }; }));
             });
 
-            const withAmp = !before || before.match(/^&[\w-]+$/);
+            const withAmp = !before?.endsWith('&');
 
             return labels.map(l => {
                 const completion = new vscode.CompletionItem(`&${l.label}`, vscode.CompletionItemKind.Class);
@@ -1086,7 +1086,7 @@ class DTSEngine implements
                     completion.insertText.appendTabstop();
                     completion.insertText.appendText('\n};\n');
                 } else if (type === 'cell' && prop) {
-                    completion.insertText = new vscode.SnippetString((withAmp ? completion.label : l.label));
+                    completion.insertText = new vscode.SnippetString(withAmp ? completion.label : l.label);
                     l.node.refCellNames(prop)?.forEach(cell => {
                         (<vscode.SnippetString>completion.insertText).appendText(' ');
                         (<vscode.SnippetString>completion.insertText).appendPlaceholder(cell);
@@ -1221,10 +1221,10 @@ class DTSEngine implements
                     }
                 }
 
-                const ref = before.match(/&([\w-]*)$/);
+                const ref = before.match(/&[\w-]*$/);
                 if (ref) {
                     const cellName = '#' + dts.cellName(prop.name);
-                    return labelItems('cell', node => !!node.property(cellName), prop.name);
+                    return labelItems(braces ? 'cell' : 'ref', node => !braces || !!node.property(cellName), prop.name);
                 }
 
                 if (prop.name === 'compatible') {

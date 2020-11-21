@@ -210,7 +210,7 @@ export class DTSTreeView implements
                 if (p) {
                     const pin = new TreeInfoItem(ctx, `Pin ${i.toString()}`);
                     pin.path = p.prop.path;
-                    pin.tooltip = p.prop.entry.node.path + p.prop.name;
+                    pin.tooltip = p.prop.entry.node.type?.description;
                     if (p.pinmux) {
                         const name = p.pinmux.name
                             .replace((p.prop.entry.node.labels()[0] ?? p.prop.entry.node.name) + '_', '')
@@ -225,6 +225,7 @@ export class DTSTreeView implements
 
             controller.path = n.path;
             controller.description = n.pins.length + ' pins';
+            controller.tooltip = n.type?.description;
             if (!controller.children.length) {
                 controller.description += ' • Nothing connected';
             } else if (controller.children.length < n.pins.length) {
@@ -273,6 +274,7 @@ export class DTSTreeView implements
                 }
 
                 parent.path = n.parent.path;
+                parent.tooltip = n.type?.description;
 
                 let offset = 0;
                 n.children().filter(c => c.regs()?.[0]?.addrs.length === 1).sort((a, b) => (a.regs()[0].addrs[0]?.val ?? 0) - (b.regs()[0].addrs[0]?.val ?? 0)).forEach(c => {
@@ -367,7 +369,7 @@ export class DTSTreeView implements
                 childIrqs?.forEach((cellValues, i, all) => {
                     const irq = new TreeInfoItem(ctx, child.node.uniqueName);
                     irq.path = child.node.path;
-                    irq.tooltip = child.node.path;
+                    irq.tooltip = child.node.type?.description;
 
                     // Some nodes have more than one interrupt:
                     if (all.length > 1) {
@@ -385,6 +387,7 @@ export class DTSTreeView implements
             });
 
             controller.item.path = controllers[i].path;
+            controller.item.tooltip = controllers[i].type?.description;
 
             if (controllers.length > 1) {
                 interrupts.addChild(controller.item);
@@ -409,11 +412,12 @@ export class DTSTreeView implements
             }
 
             bus.path = node.path;
-            bus.tooltip = node.path;
+            bus.tooltip = node.type?.description;
             node.children().forEach(child => {
                 const busEntry = new TreeInfoItem(ctx, child.localUniqueName);
                 busEntry.path = child.path;
-                busEntry.tooltip = child.path;
+                busEntry.tooltip = child.type?.description;
+
                 if (child.address !== undefined) {
                     busEntry.description = `@ 0x${child.address.toString(16)}`;
 
@@ -449,7 +453,7 @@ export class DTSTreeView implements
         nodes.filter(node => node.type?.is('adc-controller')).forEach(node => {
             const adc = new TreeInfoItem(ctx, node.uniqueName);
             adc.path = node.path;
-            adc.tooltip = node.path;
+            adc.tooltip = node.type?.description;
             nodes
             .filter(n => n.property('io-channels')?.entries?.some(entry => (entry.target instanceof PHandle) && entry.target.is(node)))
             .map(usr => {
@@ -483,6 +487,7 @@ export class DTSTreeView implements
         nodes.filter(node => node.type?.is('clock-controller')).forEach(node => {
             const clock = new TreeInfoItem(ctx, node.uniqueName);
             clock.path = node.path;
+            clock.tooltip = node.type?.description;
             const cells = node.type?.cells('clock');
             nodes.forEach(user => {
                 const clockProp = user.property('clocks');
@@ -490,6 +495,7 @@ export class DTSTreeView implements
                 entries?.forEach(e => {
                     const userEntry = new TreeInfoItem(ctx, user.uniqueName);
                     userEntry.path = user.path;
+                    userEntry.tooltip = user.type?.description;
                     cells?.forEach((c, i) => {
                         if (i < e.cells.length) {
                             userEntry.addChild(new TreeInfoItem(ctx, c, undefined, e.cells[i].toString(true)));

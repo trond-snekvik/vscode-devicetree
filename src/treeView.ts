@@ -236,9 +236,6 @@ export class DTSTreeView implements
                 controller.description += ' • Nothing connected';
             } else if (controller.children.length < n.pins.length) {
                 controller.description += ` • ${controller.children.length} in use`;
-                const unconnected = new TreeInfoItem(ctx, '');
-                unconnected.description = `${n.pins.length - controller.children.length} unused pins`;
-                controller.addChild(unconnected);
             }
 
             gpio.addChild(controller);

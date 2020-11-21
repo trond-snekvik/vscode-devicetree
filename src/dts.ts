@@ -26,9 +26,7 @@ abstract class PropertyValue {
         return this.loc.uri.toString() === uri.toString() && this.loc.range.contains(pos);
     }
 
-    toString(): string {
-        return this.val.toString();
-    }
+    abstract toString(raw?: boolean): string;
 }
 
 export class StringValue extends PropertyValue {
@@ -45,7 +43,11 @@ export class StringValue extends PropertyValue {
         }
     }
 
-    toString() {
+    toString(raw=false) {
+        if (raw) {
+            return this.val;
+        }
+
         return `"${this.val}"`;
     }
 }
@@ -56,27 +58,36 @@ export class BoolValue extends PropertyValue {
     constructor(loc: vscode.Location) {
         super(true, loc);
     }
+
+    toString(raw=false): string {
+        return this.val.toString();
+    }
 }
 
 export class IntValue extends PropertyValue {
+    raw: string;
     val: number;
-    hex: boolean;
 
-    protected constructor(val: number, loc: vscode.Location, hex=false) {
-        super(val, loc);
-        this.hex = hex;
+    protected constructor(raw: string, loc: vscode.Location) {
+        super(parseInt(raw), loc);
+        this.raw = raw;
     }
 
     static match(state: ParserState): IntValue {
         const number = state.match(/^(0x[\da-fA-F]+|\d+)\b/);
         if (number) {
-            return new IntValue(Number.parseInt(number[1]), state.location(), number[1].startsWith('0x'));
+            const loc = state.location();
+            const raw = state.raw(loc);
+            return new IntValue(raw, loc);
         }
     }
 
     toString(raw=false): string {
-        const val = this.hex ? `0x${this.val.toString(16)}` : this.val.toString();
-        return raw ? val : `< ${val} >`;
+        if (raw) {
+            return this.raw;
+        }
+
+        return `< ${this.raw} >`;
     }
 }
 
@@ -234,7 +245,11 @@ export class ArrayValue extends PropertyValue {
         return this.val.every(v => v instanceof PHandle);
     }
 
-    toString() {
+    toString(raw=false) {
+        if (raw && this.val.length === 1) {
+            return this.val[0].toString(raw);
+        }
+
         return `< ${this.val.map(v => v.toString(true)).join(' ')} >`;
     }
 }

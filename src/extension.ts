@@ -291,6 +291,21 @@ class DTSEngine implements
         await this.loadCtxs();
         this.parser.activate(ctx);
 
+        vscode.window.onDidChangeActiveTextEditor(async editor => {
+            if (editor?.document?.languageId !== 'dts') {
+                return;
+            }
+
+            await this.parser.stable();
+
+            const ctx = this.parser.ctx(editor.document.uri);
+            if (!ctx) {
+                return;
+            }
+
+            vscode.commands.executeCommand('setContext', 'devicetree:ctx.hasOverlay', ctx.overlays.length > 0);
+        });
+
         const selector = <vscode.DocumentFilter>{ language: 'dts', scheme: 'file' };
         let disposable = vscode.languages.registerDocumentSymbolProvider(selector, this);
         ctx.subscriptions.push(disposable);

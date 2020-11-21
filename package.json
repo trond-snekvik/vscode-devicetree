@@ -91,7 +91,7 @@
             {
                 "command": "devicetree.edit",
                 "title": "DeviceTree: Edit in overlay",
-                "enablement": "editorLangId == dts && resourceScheme == file",
+                "enablement": "editorLangId == dts && resourceScheme == file && devicetree:ctx.hasOverlay",
                 "icon": "$(edit)"
             }
         ],

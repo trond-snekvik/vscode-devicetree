@@ -68,8 +68,8 @@ export class IntValue extends PropertyValue {
     raw: string;
     val: number;
 
-    protected constructor(raw: string, loc: vscode.Location) {
-        super(parseInt(raw), loc);
+    protected constructor(raw: string, val: number, loc: vscode.Location) {
+        super(val, loc);
         this.raw = raw;
     }
 
@@ -78,7 +78,7 @@ export class IntValue extends PropertyValue {
         if (number) {
             const loc = state.location();
             const raw = state.raw(loc);
-            return new IntValue(raw, loc);
+            return new IntValue(raw, parseInt(number[0]), loc);
         }
     }
 
@@ -92,14 +92,6 @@ export class IntValue extends PropertyValue {
 }
 
 export class Expression extends IntValue {
-    raw: string;
-    actual: string;
-
-    private constructor(raw: string, actual: any, loc: vscode.Location) {
-        super(actual, loc);
-        this.raw = raw;
-    }
-
     static match(state: ParserState): Expression {
         const start = state.freeze();
         let m = state.match(/^\(/);

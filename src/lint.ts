@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 import * as vscode from 'vscode';
-import { getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, StringValue, DTSCtx, Property } from './dts';
+import { getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, StringValue, DTSCtx, Property, Expression } from './dts';
 import * as types from './types';
 import { DiagnosticsSet } from './diags';
 import { countText } from './util';
@@ -107,7 +107,7 @@ function lintNode(node: Node, ctx: LintCtx) {
                 if (ranges.length) {
                     // All children must have addresses in the childAddr ranges:
                     node.children().forEach(c => {
-                        c.regs().forEach(reg => {
+                        c.regs()?.forEach(reg => {
                             reg.addrs.slice(0, addrCells).some((addr, i) => {
                                 if (!ranges.find(r => addr.val >= r.childAddr[i].val && addr.val < r.childAddr[i].val + r.length[0].val)) {
                                     const loc = new vscode.Location(reg.addrs[0].loc.uri, reg.addrs[0].loc.range.union([...reg.addrs, ...reg.sizes].pop().loc.range));
@@ -426,71 +426,16 @@ function lintNode(node: Node, ctx: LintCtx) {
         });
     }
 
-    // STM32 pinmux:
-    props.filter(p => p.name.match(/^pinctrl(-\d+)?/) && p.pHandles).forEach(prop => {
-        prop.pHandles.map(handle => ctx.ctx.node(handle.val)).filter(n => n?.property('pinmux')?.number !== undefined).forEach(pinmux => {
-            const bitfield = pinmux.property('pinmux').number;
-            const port = (bitfield >> 12);
-            const pin = (bitfield >> 8) & 0x0f;
-            const controller = ctx.gpioControllers?.[port];
-            if (!controller) {
-                return;
-            }
-
-            if (pin > controller.pins?.length) {
-                ctx.diags.pushLoc(prop.loc, `No pin ${pin} of ${controller.uniqueName}`, vscode.DiagnosticSeverity.Warning);
-            } else if (controller.pins?.[pin]) {
-                const diag = ctx.diags.pushLoc(prop.loc, `Pin ${pin} of ${controller.uniqueName} already assigned to ${controller.pins[pin].prop.entry.node.path}${controller.pins[pin].prop.name}`, vscode.DiagnosticSeverity.Information);
-                diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(controller.pins[pin].prop.loc, "Overlapping assignment")];
-            } else {
-                controller.pins[pin] = { prop, cells: [], pinmux };
-            }
-        });
-    });
+    // Gather gpio controllers:
+    if (node.property('gpio-controller')) {
+        const maxPins = node.property('ngpios')?.number ?? 32;
+        node.pins = new Array(maxPins).fill(undefined);
+        ctx.gpioControllers.push(node);
+    }
 
     if (!node.type) {
         node.entries.forEach(entry => ctx.diags.pushLoc(entry.nameLoc, `Unknown node type`));
         return; // !!! The rest of the block depends on the type being resolved
-    }
-
-    // Check overlapping and out-of-bounds GPIO pin assignments
-    const pinIdx = node.type.cells('gpio')?.indexOf('pin') ?? -1;
-    if (node.property('gpio-controller') && pinIdx >= 0) {
-        const firstPin = ctx.gpioControllers.reduce((sum, n) => sum += n.property('ngpios')?.number ?? 32, 0);
-        const maxPins = node.property('ngpios')?.number ?? 32;
-        const refs = new Array<{ prop: Property, target?: PHandle, cells: IntValue[] }>();
-        ctx.ctx.nodeArray().filter(n => n.enabled()).forEach(n => {
-            n.uniqueProperties().forEach(p => {
-                if (p.name.endsWith('-pin') && p.number !== undefined) {
-                    refs.push({cells: (p.value[0] as ArrayValue).val as IntValue[], prop: p});
-                } else {
-                    refs.push(...p.entries?.filter(entry => entry.target.is(node)).map(entry => ({ prop: p, ...entry })) ?? []);
-                }
-            });
-        });
-
-        node.pins = new Array(maxPins).fill(undefined);
-        refs.forEach(ref => {
-            const pin = ref.cells[pinIdx];
-            if (!pin) {
-                return;
-            }
-
-            if (!ref.target) { // raw pin reference, e.g. sck-pin = < 5 >;
-                if (pin.val - firstPin >= firstPin && pin.val - firstPin < firstPin + maxPins) {
-                    node.pins[pin.val - firstPin] = ref;
-                }
-            } else if (pin.val >= maxPins) {
-                ctx.diags.pushLoc(pin.loc, `Pin ${pin.val} does not exist on ${ref.target?.val ?? node.uniqueName}: Only has ${maxPins} pins.`);
-            } else if (node.pins[pin.val]) {
-                const diag = ctx.diags.pushLoc(pin.loc, `Pin ${pin.val} of ${ref.target?.val ?? node.uniqueName} already assigned to ${node.pins[pin.val].prop.entry.node.path}${node.pins[pin.val].prop.name}`, vscode.DiagnosticSeverity.Information);
-                diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(node.pins[pin.val].prop.loc, "Overlapping assignment")];
-            } else {
-                node.pins[pin.val] = ref;
-            }
-        });
-
-        ctx.gpioControllers.push(node);
     }
 
     if (node.parent?.type?.bus) {
@@ -699,7 +644,90 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
     }
 }
 
+export function gatherPins(n: Node, ctx: LintCtx) {
+    if (!n.enabled()) {
+        return;
+    }
+
+    const setPin = (prop: Property, ctrl: Node, pin: number, cells: (IntValue | Expression)[]=[], pinmux?: Node) => {
+        if (!ctrl.pins) {
+            ctrl.pins = new Array(32);
+        }
+        if (pin >= ctrl.pins.length) {
+            ctx.diags.pushLoc(prop.loc, `No pin ${pin} of ${ctrl.uniqueName}`, vscode.DiagnosticSeverity.Warning);
+        } else if (ctrl.pins[pin]) {
+            const diag = ctx.diags.pushLoc(prop.loc, `Pin ${pin} of ${ctrl.uniqueName} already assigned to ${ctrl.pins[pin].prop.entry.node.path}${ctrl.pins[pin].prop.name}`, vscode.DiagnosticSeverity.Information);
+            diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(ctrl.pins[pin].prop.loc, "Overlapping assignment")];
+        } else {
+            ctrl.pins[pin] = { prop, cells, pinmux };
+        }
+    };
+
+    // pinmux:
+    n.uniqueProperties().forEach(prop => {
+        if (prop.name.match(/^pinctrl(-\d+)?/)) {
+            prop.pHandles?.map(handle => ctx.ctx.node(handle.val)).forEach(pinmux => {
+                if (!pinmux) {
+                    return;
+                }
+
+                // STM32:
+                const bitfield = pinmux.property('pinmux')?.number;
+                if (bitfield !== undefined) {
+                    const port = (bitfield >> 12);
+                    const pin = (bitfield >> 8) & 0x0f;
+                    const controller = ctx.gpioControllers?.[port];
+                    if (controller) {
+                        setPin(prop, controller, pin, [], pinmux);
+                    }
+                    return;
+                }
+
+                // Atmel:
+                const atmel = pinmux.property('atmel,pins')?.entries;
+                atmel?.forEach(e => {
+                    if (!e.cells.length) {
+                        return;
+                    }
+
+                    const controller = ctx.ctx.node(e.target.val);
+                    if (controller) {
+                        setPin(prop, controller, e.cells[0].val, e.cells.slice(1), pinmux);
+                    }
+                });
+            });
+        } else if (prop.name.endsWith('-pin')) {
+            // Raw pin assignments:
+            prop.array?.forEach(pin => ctx.gpioControllers.some(ctrl => {
+                const count = ctrl.property('ngpios')?.number ?? 32;
+                if (pin < count) {
+                    setPin(prop, ctrl, pin);
+                    return true;
+                }
+
+                pin -= count;
+                return false;
+            }));
+        } else if (prop.name === 'gpios') {
+            // gpios entries:
+            prop.entries?.forEach(entry => {
+                const ctrl = ctx.gpioControllers.find(ctrl => entry.target.is(ctrl));
+                if (ctrl && entry.cells.length) {
+                    setPin(prop, ctrl, entry.cells[0].val, entry.cells.slice(1));
+                }
+            });
+        }
+    });
+}
+
 export function lint(ctx: LintCtx) {
     ctx.ctx.entries.forEach(e => lintEntry(e, ctx));
-    Object.values(ctx.ctx.nodes).forEach(n => lintNode(n, ctx));
+    Object.values(ctx.ctx.nodes).forEach(n => {
+        try {
+            lintNode(n, ctx);
+        } catch (e) {
+            console.log(`Error: ${e}`);
+        }
+    });
+    Object.values(ctx.ctx.nodes).forEach(n => gatherPins(n, ctx));
 }

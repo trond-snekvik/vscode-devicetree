@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { DTSCtx, DTSFile, Node, Parser, PHandle, Property} from './dts';
+import { countText } from './util';
 
 function iconPath(name: string) {
     return {
@@ -406,13 +407,23 @@ export class DTSTreeView implements
 
         const buses = new TreeInfoItem(ctx, 'Buses', 'bus');
         nodes.filter(node => node.type?.bus).forEach(node => {
-            const bus = new TreeInfoItem(ctx, node.uniqueName);
+            const bus = new TreeInfoItem(ctx, node.uniqueName, undefined, '');
             if (!bus.name.toLowerCase().includes(node.type.bus.toLowerCase())) {
-                bus.description = node.type.bus;
+                bus.description = node.type.bus + ' ';
             }
 
             bus.path = node.path;
             bus.tooltip = node.type?.description;
+
+            const busProps = [/.*-speed$/, /.*-pin$/, /^clock-frequency$/, /^hw-flow-control$/, /^dma-channels$/];
+            node.uniqueProperties().filter(prop => prop.value.length > 0 && busProps.some(regex => prop.name.match(regex))).forEach(prop => {
+                const infoItem = new TreeInfoItem(ctx, prop.name.replace(/-/g, ' ') + ':', undefined, prop.value.map(v => v.toString(true)).join(', '));
+                infoItem.path = prop.path;
+                bus.addChild(infoItem);
+            });
+
+            const nodesItem = new TreeInfoItem(ctx, 'Nodes');
+
             node.children().forEach(child => {
                 const busEntry = new TreeInfoItem(ctx, child.localUniqueName);
                 busEntry.path = child.path;
@@ -434,14 +445,16 @@ export class DTSTreeView implements
                     }
                 }
 
-                bus.addChild(busEntry);
-
+                nodesItem.addChild(busEntry);
             });
 
-            if (!bus.children.length) {
-                bus.description = (bus.description ? bus.description + ' ' : '') + '• Nothing connected';
+            if (nodesItem.children.length) {
+                bus.description += `• ${countText(nodesItem.children.length, 'node')}`;
+            } else {
+                nodesItem.description = '• Nothing connected';
             }
 
+            bus.addChild(nodesItem);
             buses.addChild(bus);
         });
 

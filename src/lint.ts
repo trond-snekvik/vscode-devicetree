@@ -7,23 +7,9 @@ import * as vscode from 'vscode';
 import { getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, StringValue, DTSCtx, Property } from './dts';
 import * as types from './types';
 import { DiagnosticsSet } from './diags';
+import { countText } from './util';
 
 export type LintCtx = { ctx: DTSCtx, types: types.TypeLoader, diags: DiagnosticsSet, gpioControllers: Node[], labels: {[name: string]: Node} };
-
-function countText(count: number, text: string, plural?: string): string {
-    if (!plural) {
-        plural = text + 's';
-    }
-
-    let out = count.toString() + ' ';
-    if (count === 1) {
-        out += text;
-    } else {
-        out += plural;
-    }
-
-    return out;
-}
 
 function lintNode(node: Node, ctx: LintCtx) {
     const props = node.uniqueProperties();

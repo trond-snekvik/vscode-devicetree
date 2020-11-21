@@ -711,9 +711,18 @@ export function gatherPins(n: Node, ctx: LintCtx) {
         } else if (prop.name === 'gpios') {
             // gpios entries:
             prop.entries?.forEach(entry => {
-                const ctrl = ctx.gpioControllers.find(ctrl => entry.target.is(ctrl));
+                let ctrl = ctx.gpioControllers.find(ctrl => entry.target.is(ctrl));
+                let cells = entry.cells;
+                if (!ctrl) { // Check whether this is referencing a nexus node:
+                    const nexus = ctx.ctx.node(entry.target.val)?.remap(prop.name, entry);
+                    if (nexus) {
+                        ctrl = ctx.gpioControllers.find(ctrl => nexus.target.is(ctrl));
+                        cells = nexus.cells;
+                    }
+                }
+
                 if (ctrl && entry.cells.length) {
-                    setPin(prop, ctrl, entry.cells[0].val, entry.cells.slice(1));
+                    setPin(prop, ctrl, cells[0].val, cells);
                 }
             });
         }

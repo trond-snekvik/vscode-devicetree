@@ -82,6 +82,10 @@ export class IntValue extends PropertyValue {
         }
     }
 
+    apply(newValue: number) {
+        return new IntValue(newValue.toString(), newValue, this.loc);
+    }
+
     toString(raw=false): string {
         if (raw) {
             return this.raw;
@@ -730,6 +734,8 @@ function parsePropValue(state: ParserState) {
     return elems;
 }
 
+export type PHandleEntry = { target: PHandle, cells: (IntValue | Expression)[] };
+
 export class Property {
     name: string;
     labels?: string[];
@@ -882,7 +888,7 @@ export class Property {
             return;
         }
 
-        const entries = new Array<{ target: PHandle, cells: (IntValue | Expression)[] }>();
+        const entries = new Array<PHandleEntry>();
 
         val.forEach(v => {
             let i = 0;
@@ -1428,6 +1434,24 @@ export class Node {
         }
 
         return `&{${this.path}}`;
+    }
+
+    remap(name: string, entry: PHandleEntry): PHandleEntry {
+        const entity = name.slice(0, name.length - 1);
+        const map = this.property(entity + '-map');
+        if (!map) {
+            return;
+        }
+
+        const mask = this.property(entity + '-map-mask')?.array ?? [];
+        const passThru = this.property(entity + '-map-pass-thru')?.array ?? [];
+        const out = map.nexusMap?.find(e => entry.cells.every((c, i) => (c.val & (mask[i] ?? 0xffffffff)) === e.in[i]?.val))
+        if (out) {
+            return {
+                target: out.target,
+                cells: out.out.map((c, i) => c.apply(c.val | ((entry.cells[i]?.val ?? 0) & (passThru[i] ?? 0xffffffff))))
+            };
+        }
     }
 
     properties(): Property[] {

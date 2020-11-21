@@ -474,7 +474,7 @@ function lintNode(node: Node, ctx: LintCtx) {
         const maxPins = node.property('ngpios')?.number ?? 32;
         const refs = new Array<{ prop: Property, target?: PHandle, cells: IntValue[] }>();
         ctx.ctx.nodeArray().filter(n => n.enabled()).forEach(n => {
-            n.properties().forEach(p => {
+            n.uniqueProperties().forEach(p => {
                 if (p.name.endsWith('-pin') && p.number !== undefined) {
                     refs.push({cells: (p.value[0] as ArrayValue).val as IntValue[], prop: p});
                 } else {

@@ -858,8 +858,8 @@ export class Property {
             return this.value[0].val as PHandle[];
         }
 
-        if (this.value.every(v => v instanceof PHandle)) {
-            return this.value as PHandle[];
+        if (this.value.every(v => (v instanceof ArrayValue) && v.val.every(p => p instanceof PHandle))) {
+            return this.value.flatMap(v => v.val as PHandle[]);
         }
     }
 

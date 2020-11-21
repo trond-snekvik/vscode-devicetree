@@ -351,7 +351,9 @@ class DTSEngine implements
                 canSelectFolders: true,
                 canSelectMany: false,
                 openLabel: 'Select folder',
-                defaultUri: vscode.window.activeTextEditor?.document?.uri ?? vscode.workspace.workspaceFolders?.[0].uri,
+                defaultUri: vscode.window.activeTextEditor?.document ?
+                    vscode.Uri.file(path.dirname(vscode.window.activeTextEditor?.document?.uri.fsPath)) :
+                    vscode.workspace.workspaceFolders?.[0].uri,
             }).then(uris => uris?.[0].fsPath, () => undefined);
 
             if (!folder) {

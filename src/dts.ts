@@ -1004,9 +1004,16 @@ export class Property {
         return map;
     }
 
+    valueNames(): string[] {
+        if (!this.name.endsWith('s')) {
+            return [];
+        }
+
+        return this.entry.node.property(this.name.slice(0, this.name.length - 1) + '-names')?.stringArray ?? [];
+    }
+
     /* Get the expected cellnames for this property. */
     cellNames(ctx: DTSCtx): string[][] {
-
         const arr = this.pHandleArray;
         if (!arr) {
             return [];

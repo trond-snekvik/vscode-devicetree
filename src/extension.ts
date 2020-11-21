@@ -13,6 +13,7 @@ import * as path from 'path';
 import { DiagnosticsSet } from './diags';
 import { existsSync, readFile, writeFile, writeFileSync } from 'fs';
 import { DTSTreeView } from './treeView';
+import { capitalize } from './util';
 
 const config = vscode.workspace.getConfiguration('devicetree');
 
@@ -1427,12 +1428,12 @@ class DTSEngine implements
             return;
         }
 
-
         const names = prop.cellNames(ctx);
         if ((names?.length ?? 0) < entryIdx) {
             return;
         }
 
+        const entryNames = prop.valueNames().map(e => `${capitalize(prop.name.slice(0, prop.name.length - 1))} "${e}"`);
         const cells = names[entryIdx];
         const paramIndex = (value[entryIdx].val.findIndex(v => v.loc.range.contains(position)) ?? (value[entryIdx].val.length - 1)) % cells.length;
 
@@ -1445,7 +1446,7 @@ class DTSEngine implements
 
         signature += '>;';
 
-        const info = new vscode.SignatureInformation(signature, propType?.description);
+        const info = new vscode.SignatureInformation(signature, [entryNames[entryIdx], propType?.description].filter(t => t).join('\n\n'));
         info.parameters = params;
 
         return <vscode.SignatureHelp>{activeParameter: paramIndex, activeSignature: 0, signatures: [info]};

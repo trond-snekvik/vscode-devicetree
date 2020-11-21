@@ -162,11 +162,6 @@ function lintNode(node: Node, ctx: LintCtx) {
             const addressCells = node.parent?.addrCells() ?? 2;
             const isInterrupt = specifier === 'interrupt';
 
-            // const map = prop.nexusMap;
-            // if (!map) {
-            //     return; // todo: diag?
-            // }
-
             if (!cells?.number) {
                 ctx.diags.pushLoc(prop.loc, `Nexus nodes need numeric cells specifier (Node is missing #${specifier}-cells property)`, vscode.DiagnosticSeverity.Error);
                 return;
@@ -296,7 +291,6 @@ function lintNode(node: Node, ctx: LintCtx) {
                     uniqueMaps[encoded] = m;
                 }
             });
-
         } else if (prop.name.endsWith('-names')) {
             /* <id>-names entries should map to a <id>s entry that is an array with the same number of elements. */
             const id = prop.name.match(/(.*)-names$/)[1];
@@ -683,7 +677,7 @@ export function gatherPins(n: Node, ctx: LintCtx) {
                 if (bitfield !== undefined) {
                     const port = (bitfield >> 12);
                     const pin = (bitfield >> 8) & 0x0f;
-                    const controller = ctx.gpioControllers?.[port];
+                    const controller = ctx.gpioControllers[port];
                     if (controller) {
                         setPin(prop, controller, pin, [], pinmux);
                     }

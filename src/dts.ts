@@ -6,7 +6,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as zephyr from './zephyr';
-import { MacroInstance, Macro, preprocess, IncludeStatement, LineMacro, FileMacro, CounterMacro } from './preprocessor';
+import { MacroInstance, Macro, preprocess, IncludeStatement, replace } from './preprocessor';
 import { DiagnosticsSet } from './diags';
 import { NodeType, TypeLoader } from './types';
 
@@ -340,39 +340,6 @@ export class PHandle extends PropertyValue {
     }
 }
 
-export function evaluateExpr(expr: string, start: vscode.Position, diags: vscode.Diagnostic[]) {
-    expr = expr.trim().replace(/([\d.]+|0x[\da-f]+)[ULf]+/gi, '$1');
-    let m: RegExpMatchArray;
-    let level = 0;
-    let text = '';
-    while ((m = expr.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+/*-]|\s*|0x[\da-fA-F]+|[\d.]+)\s*)*([()]?)/)) && m[0].length) {
-        text += m[0];
-        if (m[1] === '(') {
-            level++;
-        } else if (m[1] === ')') {
-            if (!level) {
-                return undefined;
-            }
-
-            level--;
-        }
-
-        expr = expr.slice(m.index + m[0].length);
-    }
-
-    if (!text || level || expr) {
-        diags.push(new vscode.Diagnostic(new vscode.Range(start.line, start.character + m.index, start.line, start.character + m.index), `Unterminated expression`));
-        return undefined;
-    }
-
-    try {
-        return eval(text);
-    } catch (e) {
-        diags.push(new vscode.Diagnostic(new vscode.Range(start.line, start.character, start.line, start.character + text.length), `Unable to evaluate expression`));
-        return undefined;
-    }
-}
-
 export class Line {
     raw: string;
     text: string;
@@ -451,9 +418,9 @@ export class Line {
     constructor(raw: string, number: number, uri: vscode.Uri, macros: MacroInstance[]=[]) {
         this.raw = raw;
         this.number = number;
-        this.macros = MacroInstance.filterOverlapping(macros);
+        this.macros = macros;
         this.location = new vscode.Location(uri, new vscode.Range(this.number, 0, this.number, this.raw.length));
-        this.text = MacroInstance.process(raw, this.macros);
+        this.text = replace(raw, this.macros);
     }
 }
 
@@ -549,29 +516,6 @@ class ParserState {
         const action = this.pushInsertAction('Add semicolon', ';', loc);
         action.isPreferred = true;
         return action;
-    }
-
-    private replaceDefines(text: string, loc: vscode.Location) {
-        const macros = new Array<MacroInstance>();
-        this.macros.filter(d => !d.undef).forEach(d => {
-            macros.push(...d.find(text, this.macros, loc));
-        });
-
-        return MacroInstance.process(text, MacroInstance.filterOverlapping(macros));
-    }
-
-    evaluate(text: string, loc: vscode.Location): any {
-        text = this.replaceDefines(text, loc);
-        try {
-            const diags = new Array<vscode.Diagnostic>();
-            const result = evaluateExpr(text, loc.range.start, diags);
-            diags.forEach(d => this.pushDiag(d.message, d.severity, new vscode.Location(loc.uri, d.range)));
-            return result;
-        } catch (e) {
-            this.pushDiag('Evaluation failed: ' + e.toString(), vscode.DiagnosticSeverity.Error, loc);
-        }
-
-        return 0;
     }
 
     match(pattern?: RegExp): RegExpMatchArray | undefined {

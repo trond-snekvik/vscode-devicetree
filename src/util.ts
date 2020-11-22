@@ -3,6 +3,7 @@
  *
  * SPDX-License-Identifier: MIT
  */
+import * as vscode from 'vscode';
 
 export function countText(count: number, text: string, plural?: string): string {
 	if (!plural) {
@@ -29,4 +30,37 @@ export function capitalize(str: string): string {
 		}
 		return first.toUpperCase() + rest;
 	});
+}
+
+export function evaluateExpr(expr: string, start: vscode.Position, diags: vscode.Diagnostic[]=[]) {
+    expr = expr.trim().replace(/([\d.]+|0x[\da-f]+)[ULf]+/gi, '$1');
+    let m: RegExpMatchArray;
+    let level = 0;
+    let text = '';
+    while ((m = expr.match(/(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+/*-]|\s*|0x[\da-fA-F]+|[\d.]+|'.')\s*)*([()]?)/)) && m[0].length) {
+        text += m[0].replace(/'(.)'/g, (_, char: string) => char.codePointAt(0).toString());
+        if (m[1] === '(') {
+            level++;
+        } else if (m[1] === ')') {
+            if (!level) {
+                return undefined;
+            }
+
+            level--;
+        }
+
+        expr = expr.slice(m.index + m[0].length);
+    }
+
+    if (!text || level || expr) {
+        diags.push(new vscode.Diagnostic(new vscode.Range(start.line, start.character + m.index, start.line, start.character + m.index), `Unterminated expression`));
+        return undefined;
+    }
+
+    try {
+        return eval(text);
+    } catch (e) {
+        diags.push(new vscode.Diagnostic(new vscode.Range(start.line, start.character, start.line, start.character + text.length), `Unable to evaluate expression`));
+        return undefined;
+    }
 }

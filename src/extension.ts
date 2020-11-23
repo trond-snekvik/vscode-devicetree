@@ -79,7 +79,7 @@ function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString,
             } else if (p.const) {
                 snippet.appendText(p.const.toString());
             } else if (p.enum) {
-                snippet.appendPlaceholder(p.enum[0]);
+                snippet.appendPlaceholder(p.enum[0].toString());
             } else {
                 snippet.appendTabstop();
             }
@@ -93,7 +93,7 @@ function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString,
             } else if (p.const) {
                 snippet.appendText(p.const.toString());
             } else if (p.enum) {
-                snippet.appendPlaceholder(p.enum[0]);
+                snippet.appendPlaceholder(p.enum[0].toString());
             } else {
                 snippet.appendTabstop();
             }
@@ -1220,11 +1220,11 @@ class DTSEngine implements
                     if (propType.enum) {
                         const filterText = document.getText(document.getWordRangeAtPosition(position));
                         return propType.enum.map(e => {
-                            const completion = new vscode.CompletionItem(e, vscode.CompletionItemKind.EnumMember);
+                            const completion = new vscode.CompletionItem(e.toString(), vscode.CompletionItemKind.EnumMember);
                             completion.range = range;
                             completion.filterText = filterText;
                             if (!braces) {
-                                completion.insertText = propValueTemplate(e, propType.type);
+                                completion.insertText = propValueTemplate(e.toString(), propType.type);
                             }
                             return completion;
                         });

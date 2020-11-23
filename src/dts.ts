@@ -768,6 +768,22 @@ export class Property {
         }
     }
 
+    get singleVal() {
+        if (this.value.length !== 1) {
+            return;
+        }
+
+        const val = this.value[0];
+
+        if (val instanceof ArrayValue && val.length === 1) {
+            return val.val[0].val;
+        }
+
+        if (val instanceof StringValue || val instanceof BoolValue || val instanceof IntValue) {
+            return val.val;
+        }
+    }
+
     get pHandle() {
         if (this.value.length === 1 && (this.value[0] instanceof ArrayValue) && this.value[0].val.length === 1 && (this.value[0].val[0] instanceof PHandle)) {
             return this.value[0].val[0] as PHandle;

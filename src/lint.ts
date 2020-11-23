@@ -632,9 +632,10 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
         }
 
         if (propType.enum) {
-            if (prop.value.length > 1) {
+            const val = prop.singleVal;
+            if (val === undefined || (typeof val === 'boolean')) {
                 ctx.diags.pushLoc(prop.loc, `Expected non-array type for value with enum`);
-            } else if (!propType.enum.includes(prop.value[0].val.toString())) {
+            } else if (!propType.enum.includes(val)) {
                 ctx.diags.pushLoc(prop.loc, 'Property value must be one of ' + propType.enum.join(', '));
             }
         }

@@ -14,7 +14,7 @@ import { DiagnosticsSet } from './diags';
 export interface PropertyType {
     name: string;
     required: boolean;
-    enum?: string[];
+    enum?: (string | number)[];
     const?: string | number;
     default?: any;
     type: string | string[];

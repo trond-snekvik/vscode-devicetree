@@ -113,6 +113,9 @@ definitions:
             description: A human readable help text for the property.
           enum:
             type: array
+            items:
+              - string
+              - integer
             description: A property enum value restricts the possible values for the property.
           const:
             type:

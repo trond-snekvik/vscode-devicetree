@@ -457,6 +457,25 @@ function lintNode(node: Node, ctx: LintCtx) {
         }
     }
 
+    if (node.type.is('fixed-partitions')) {
+        const flash = node.parent?.regs();
+        if (!flash) {
+            return;
+        }
+        node.children().forEach(partition => {
+            partition.regs().forEach(reg => {
+                if (reg.addrs[0].val < flash[0].addrs[0].val) {
+                    const diag = ctx.diags.pushLoc(reg.addrs[0].loc, `Partition starts outside flash area`);
+                    diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(flash[0].addrs[0].loc, 'Flash area defined here')];
+                }
+                if (reg.addrs[0].val + reg.sizes[0].val >= flash[0].addrs[0].val + flash[0].sizes[0].val) {
+                    const diag = ctx.diags.pushLoc(reg.sizes[0].loc, `Partition exceeds flash area`);
+                    diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(flash[0].addrs[0].loc, 'Flash area defined here')];
+                }
+            })
+        });
+    }
+
     node.type.properties.forEach(propType => {
         if (!node.property(propType.name) && propType.required) {
             node.entries.forEach(e => ctx.diags.pushLoc(e.nameLoc, `Property "${propType.name}" is required`, node.enabled() ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Information));

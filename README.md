@@ -45,6 +45,7 @@ This extension is an independent community contribution, and is not part of the 
   - GPIO pin collisions
   - Duplicate labels
   - Nexus node map entry exists
+  - Flash partitions fit inside their area
 - DeviceTree overview
   - GPIO assignments
   - Flash partitions

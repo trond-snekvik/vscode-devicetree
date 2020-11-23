@@ -9,9 +9,9 @@ import { after } from 'mocha';
 import * as path from 'path';
 import * as fs from 'fs';
 import { preprocess, Macro, MacroInstance } from '../preprocessor';
-import { evaluateExpr, Line } from '../dts';
+import { Line } from '../dts';
+import { evaluateExpr } from '../util'
 import { DiagnosticsSet } from '../diags';
-// import * as myExtension from '../extension';
 
 // bake: Output needs to be manually verified
 const BAKE_OUTPUT = false;
@@ -32,14 +32,53 @@ suite('Parser test suite', () => {
 			fs.writeFileSync(extensionDevelopmentPath + '/src/test/output.h', lines.map(l => l.text).join('\n'));
 		}
 
-		assert.equal(lines.map(l => l.text).join('\n'), fs.readFileSync(extensionDevelopmentPath + '/src/test/output.h'));
+		const expected = fs.readFileSync(extensionDevelopmentPath + '/src/test/output.h', 'utf-8').split(/\r?\n/g);
+		assert.equal(lines.length, expected.length);
+
+		lines.forEach((l, i) => {
+			assert.equal(l.text.trim(), expected[i].trim());
+		});
 
 		[lines, macros, includes] = await preprocess(doc, [new Macro('TEST_DIAGS', ''), new Macro('TEST_VALID_DIRECTIVES', '')], [], diags);
-		assert.equal(diags.length, 0, JSON.stringify(diags));
+		assert.equal(diags.length, 0, diags.toString());
 		[lines, macros, includes] = await preprocess(doc, [new Macro('TEST_DIAGS', ''), new Macro('TEST_INVALID_DIRECTIVES', '')], [], diags);
-		assert.equal(diags.length, 1, JSON.stringify(diags));
-		assert.equal(diags[0].uri.fsPath, path.resolve(extensionDevelopmentPath + '/src/test/test.invalid.c'));
-		assert.equal(diags[0].diags.length, fs.readFileSync(diags[0].uri.fsPath).toString().match(/\/\/ fail/g).length, diags.toString());
+	});
+
+	test('Nested macros', async () => {
+		const doc = await vscode.workspace.openTextDocument({language: 'dts', content: `
+		#define SUM(a, b) a + b
+		#define STR(a) # a
+		#define LITERAL(a) a
+		#define STR2(a) STR(a)
+		#define CONCAT(a, b) a##b
+		#define CONCAT2(a, b) CONCAT(a, b)
+		#define CONCAT3(a, b, c) a##b##c
+		#define VAL xyz
+		#define VAL2 ffff
+		#define PARAM_CONCAT(a) VAL##a
+		#define PARAM_CONCAT2(a) VAL##undefined
+		VAL == xyz
+		CONCAT(p, q) == pq
+		CONCAT(VAL, 1) == VAL1
+		CONCAT(VAL, VAL) == VALVAL
+		LITERAL(VAL) == xyz
+		STR(VAL) == "VAL"
+		STR2(VAL) == "xyz"
+		CONCAT3(V, A, L) == xyz
+		CONCAT2(V, AL) == xyz
+		PARAM_CONCAT(2) == ffff
+		PARAM_CONCAT2(2) == VALundefined
+		`});
+		const diags = new DiagnosticsSet();
+
+		const [lines, macros, includes] = await preprocess(doc, [], [], diags);
+		assert.equal(diags.all.length, 0, diags.all.toString());
+		lines.filter(line => line.text.includes('==')).map(line => {
+			const actual = line.text.split('==')[0].trim();
+			const expected = line.raw.split('==')[1].trim();
+			// console.log(`${actual} == ${expected}`);
+			return {actual, expected, line};
+		}).forEach((v) => assert.equal(v.actual, v.expected, v.line.raw))
 	});
 
 	test('Line remap', () => {
@@ -91,5 +130,6 @@ suite('Parser test suite', () => {
 		assert.equal(false, evaluateExpr('1 == 2', position, []));
 		assert.equal(true, evaluateExpr('1 <= 2', position, []));
 		assert.equal(true, evaluateExpr('1 < 2', position, []));
+		assert.equal(98, evaluateExpr("'a' + 1", position, []));
 	});
 });

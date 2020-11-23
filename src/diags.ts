@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 import * as vscode from 'vscode';
+import * as path from 'path';
 
 export class DiagnosticsSet {
     private sets: {[path: string]: {uri: vscode.Uri, diags: vscode.Diagnostic[], actions: vscode.CodeAction[]}} = {};
@@ -79,6 +80,10 @@ export class DiagnosticsSet {
 
     get all() {
         return Object.values(this.sets);
+    }
+
+    toString() {
+        return this.all.flatMap(file => file.diags.map(d => `${path.basename(file.uri.fsPath)}:${d.range.start.line + 1}: ${vscode.DiagnosticSeverity[d.severity]}: ${d.message}`)).join('\n');
     }
 }
 

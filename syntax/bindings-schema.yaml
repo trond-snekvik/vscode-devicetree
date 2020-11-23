@@ -3,9 +3,6 @@ $id: https://github.com/trond-snekvik/vscode-devicetree/tree/master/syntax/bindi
 # title: Zephyr Project DeviceTree bindings schema
 # additionalProperties: false
 type: object
-required:
-  - compatible
-  - description
 properties:
   description:
     $ref: "#/definitions/description"

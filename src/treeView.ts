@@ -252,7 +252,7 @@ export class DTSTreeView implements
                 { size: 1024 * 1024, name: 'MB' },
                 { size: 1024, name: 'kB' },
                 { size: 1, name: 'B' },
-            ].find(spec => size >= spec.size);
+            ].find(spec => Math.abs(size) >= spec.size && !(size % spec.size));
 
             if (size % spec.size) {
                 return (size / spec.size).toFixed(3) + ' ' + spec.name;
@@ -306,7 +306,7 @@ export class DTSTreeView implements
                     offset = start + size;
                 });
 
-                if (capacity !== undefined && offset !== capacity) {
+                if (capacity !== undefined && offset < capacity) {
                     parent.addChild(new TreeInfoItem(ctx, `Free space @ 0x${offset.toString(16)}`, undefined, sizeString(capacity - offset)));
                 }
             });

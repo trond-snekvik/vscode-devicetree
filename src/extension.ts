@@ -92,6 +92,8 @@ function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString,
                 snippet.appendPlaceholder(p.default.toString());
             } else if (p.const) {
                 snippet.appendText(p.const.toString());
+            } else if (p.name === 'status') {
+                snippet.appendPlaceholder('okay');
             } else if (p.enum) {
                 snippet.appendPlaceholder(p.enum[0].toString());
             } else {

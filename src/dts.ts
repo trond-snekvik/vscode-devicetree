@@ -74,11 +74,11 @@ export class IntValue extends PropertyValue {
     }
 
     static match(state: ParserState): IntValue {
-        const number = state.match(/^(0x[\da-fA-F]+|\d+)\b/);
+        const number = state.match(/^(0x[\da-fA-F]+|\d+)[uUlL]*\b/);
         if (number) {
             const loc = state.location();
             const raw = state.raw(loc);
-            return new IntValue(raw, parseInt(number[0]), loc);
+            return new IntValue(raw, parseInt(number[1]), loc);
         }
     }
 

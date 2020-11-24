@@ -6,7 +6,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as zephyr from './zephyr';
-import { MacroInstance, Macro, preprocess, IncludeStatement, replace } from './preprocessor';
+import { Macro, preprocess, IncludeStatement, Line } from './preprocessor';
 import { DiagnosticsSet } from './diags';
 import { NodeType, TypeLoader } from './types';
 
@@ -337,90 +337,6 @@ export class PHandle extends PropertyValue {
         case 'invalid':
             return '';
         }
-    }
-}
-
-export class Line {
-    raw: string;
-    text: string;
-    number: number;
-    macros: MacroInstance[];
-    location: vscode.Location;
-
-    get length(): number {
-        return this.text.length;
-    }
-
-    rawPos(range: vscode.Range): vscode.Range;
-    rawPos(position: vscode.Position, earliest: boolean): number;
-    rawPos(offset: number, earliest: boolean): number;
-
-    /**
-     * Remap a location in the processed text to a location in the raw input text (real human readable location)
-     *
-     * For instance, if a processed line is
-     *
-     * foo bar 1234
-     *
-     * and the unprocessed line is
-     *
-     * foo MACRO_1 MACRO_2
-     *
-     * the outputs should map like this:
-     *
-     * remap(0) -> 0
-     * remap(4) -> 4 (from the 'b' in bar)
-     * remap(5) -> 4 (from the 'a' in bar)
-     * remap(5, true) -> 6 (from the 'a' in bar)
-     * remap(9) -> 8 (from the '2' in 1234)
-     *
-     * @param loc Location in processed text
-     * @param earliest Whether to get the earliest matching position
-     */
-    rawPos(loc: vscode.Position | vscode.Range | number, earliest=true) {
-        if (loc instanceof vscode.Position) {
-            return new vscode.Position(loc.line, this.rawPos(loc.character, earliest));
-        }
-
-        if (loc instanceof vscode.Range) {
-            return new vscode.Range(loc.start.line, this.rawPos(loc.start, true), loc.end.line, this.rawPos(loc.end, false));
-        }
-
-        this.macros.find(m => {
-            loc = <number>loc; // Just tricking typescript :)
-            if (m.start > loc) {
-                return true; // As macros are sorted by their start pos, there's no need to go through the rest
-            }
-
-            // Is inside macro
-            if (loc < m.start + m.insert.length) {
-                loc = m.start;
-                if (!earliest) {
-                    loc += m.raw.length; // clamp to end of macro
-                }
-                return true;
-            }
-
-            loc += m.raw.length - m.insert.length;
-        });
-
-        return loc;
-    }
-
-    contains(uri: vscode.Uri, pos: vscode.Position) {
-        return uri.toString() === this.location.uri.toString() && this.location.range.contains(pos);
-    }
-
-    get uri() {
-        return this.location.uri;
-    }
-
-    constructor(raw: string, number: number, uri: vscode.Uri, macros: MacroInstance[]=[]) {
-        this.raw = raw;
-        this.number = number;
-        this.macros = macros;
-        this.location = new vscode.Location(uri, new vscode.Range(this.number, 0, this.number, this.raw.length));
-        this.text = replace(raw, this.macros);
     }
 }
 
@@ -1405,7 +1321,7 @@ export class Node {
 
         const mask = this.property(entity + '-map-mask')?.array ?? [];
         const passThru = this.property(entity + '-map-pass-thru')?.array ?? [];
-        const out = map.nexusMap?.find(e => entry.cells.every((c, i) => (c.val & (mask[i] ?? 0xffffffff)) === e.in[i]?.val))
+        const out = map.nexusMap?.find(e => entry.cells.every((c, i) => (c.val & (mask[i] ?? 0xffffffff)) === e.in[i]?.val));
         if (out) {
             return {
                 target: out.target,

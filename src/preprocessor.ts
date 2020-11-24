@@ -6,11 +6,15 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { Line } from './dts';
 import { DiagnosticsSet } from './diags';
 import { evaluateExpr } from './util';
 
-export function replace(text: string, macros: MacroInstance[]) {
+export type IncludeStatement = { loc: vscode.Location, dst: vscode.Uri };
+
+type Output = [Line[], Macro[], IncludeStatement[]];
+type Defines = { [name: string]: Macro };
+
+function replace(text: string, macros: MacroInstance[]) {
     // Replace values from back to front:
     [...macros].sort((a, b) => b.start - a.start).forEach(m => {
         text = text.slice(0, m.start) + m.insert + text.slice(m.start + m.raw.length);
@@ -66,7 +70,7 @@ function resolve(text: string, defines: Defines, loc: vscode.Location): string {
     return replace(text, findReplacements(text, defines, loc));
 }
 
-export function findReplacements(text: string, defines: Defines, loc: vscode.Location): MacroInstance[] {
+function findReplacements(text: string, defines: Defines, loc: vscode.Location): MacroInstance[] {
     const macros = new Array<MacroInstance>();
     const regex = new RegExp(/\w+|(?<!\\)"/g);
     let inString = false;
@@ -235,11 +239,6 @@ function readLines(doc: vscode.TextDocument): Line[] | null {
         return null;
     }
 }
-
-export type IncludeStatement = { loc: vscode.Location, dst: vscode.Uri };
-
-type Output = [Line[], Macro[], IncludeStatement[]];
-type Defines = { [name: string]: Macro };
 
 function evaluate(text: string, loc: vscode.Location, defines: Defines, diagSet: DiagnosticsSet): any {
     text = resolve(text, defines, loc);
@@ -513,4 +512,89 @@ export async function preprocess(doc: vscode.TextDocument, defines: Macro[], inc
     // console.log(`Preprocessed ${doc.uri.fsPath} in ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
 
     return Promise.resolve([result.lines, result.macros, result.includes]);
+}
+
+
+export class Line {
+    raw: string;
+    text: string;
+    number: number;
+    macros: MacroInstance[];
+    location: vscode.Location;
+
+    get length(): number {
+        return this.text.length;
+    }
+
+    rawPos(range: vscode.Range): vscode.Range;
+    rawPos(position: vscode.Position, earliest: boolean): number;
+    rawPos(offset: number, earliest: boolean): number;
+
+    /**
+     * Remap a location in the processed text to a location in the raw input text (real human readable location)
+     *
+     * For instance, if a processed line is
+     *
+     * foo bar 1234
+     *
+     * and the unprocessed line is
+     *
+     * foo MACRO_1 MACRO_2
+     *
+     * the outputs should map like this:
+     *
+     * remap(0) -> 0
+     * remap(4) -> 4 (from the 'b' in bar)
+     * remap(5) -> 4 (from the 'a' in bar)
+     * remap(5, true) -> 6 (from the 'a' in bar)
+     * remap(9) -> 8 (from the '2' in 1234)
+     *
+     * @param loc Location in processed text
+     * @param earliest Whether to get the earliest matching position
+     */
+    rawPos(loc: vscode.Position | vscode.Range | number, earliest=true) {
+        if (loc instanceof vscode.Position) {
+            return new vscode.Position(loc.line, this.rawPos(loc.character, earliest));
+        }
+
+        if (loc instanceof vscode.Range) {
+            return new vscode.Range(loc.start.line, this.rawPos(loc.start, true), loc.end.line, this.rawPos(loc.end, false));
+        }
+
+        this.macros.find(m => {
+            loc = <number>loc; // Just tricking typescript :)
+            if (m.start > loc) {
+                return true; // As macros are sorted by their start pos, there's no need to go through the rest
+            }
+
+            // Is inside macro
+            if (loc < m.start + m.insert.length) {
+                loc = m.start;
+                if (!earliest) {
+                    loc += m.raw.length; // clamp to end of macro
+                }
+                return true;
+            }
+
+            loc += m.raw.length - m.insert.length;
+        });
+
+        return loc;
+    }
+
+    contains(uri: vscode.Uri, pos: vscode.Position) {
+        return uri.toString() === this.location.uri.toString() && this.location.range.contains(pos);
+    }
+
+    get uri() {
+        return this.location.uri;
+    }
+
+    constructor(raw: string, number: number, uri: vscode.Uri, macros: MacroInstance[]=[]) {
+        this.raw = raw;
+        this.number = number;
+        this.macros = macros;
+        this.location = new vscode.Location(uri, new vscode.Range(this.number, 0, this.number, this.raw.length));
+        this.text = replace(raw, this.macros);
+    }
 }

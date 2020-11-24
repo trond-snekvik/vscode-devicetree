@@ -8,9 +8,8 @@ import * as assert from 'assert';
 import { after } from 'mocha';
 import * as path from 'path';
 import * as fs from 'fs';
-import { preprocess, Macro, MacroInstance } from '../preprocessor';
-import { Line } from '../dts';
-import { evaluateExpr } from '../util'
+import { preprocess, Macro, MacroInstance, Line } from '../preprocessor';
+import { evaluateExpr } from '../util';
 import { DiagnosticsSet } from '../diags';
 
 // bake: Output needs to be manually verified
@@ -78,7 +77,7 @@ suite('Parser test suite', () => {
 			const expected = line.raw.split('==')[1].trim();
 			// console.log(`${actual} == ${expected}`);
 			return {actual, expected, line};
-		}).forEach((v) => assert.equal(v.actual, v.expected, v.line.raw))
+		}).forEach((v) => assert.equal(v.actual, v.expected, v.line.raw));
 	});
 
 	test('Line remap', () => {

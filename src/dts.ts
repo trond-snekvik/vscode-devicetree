@@ -1665,7 +1665,7 @@ export class Parser {
         }
     }
 
-    activate(ctx: vscode.ExtensionContext) {
+    async activate(ctx: vscode.ExtensionContext) {
         // ctx.subscriptions.push(vscode.workspace.onDidOpenTextDocument(doc => notActive(() => this.onDidOpen(doc))));
         ctx.subscriptions.push(vscode.workspace.onDidChangeTextDocument(doc => this.onDidChange(doc)));
         ctx.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(e => this.onDidChangetextEditor(e)));
@@ -1680,7 +1680,7 @@ export class Parser {
                 this.reparse(this.currCtx);
             }
         })));
-        vscode.window.visibleTextEditors.forEach(e => this.onDidOpen(e.document));
+        return Promise.all(vscode.window.visibleTextEditors.map(e => this.onDidOpen(e.document)));
     }
 
     private async parse(ctx: DTSCtx, doc: vscode.TextDocument): Promise<DTSFile> {

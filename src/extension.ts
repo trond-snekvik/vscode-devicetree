@@ -361,8 +361,12 @@ class DTSEngine implements
         const procTime = process.hrtime(timeStart);
         console.log(`Found ${Object.keys(this.types.types).length} bindings in ${bindingDirs.join(', ')}. ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
         await this.loadCtxs();
-        this.parser.activate(ctx);
+        await this.parser.activate(ctx);
         this.cSupport.activate(ctx);
+
+        if (this.parser.currCtx?.overlays.length) {
+            vscode.commands.executeCommand('setContext', 'devicetree:ctx.hasOverlay', true);
+        }
 
         vscode.window.onDidChangeActiveTextEditor(async editor => {
             if (editor?.document?.languageId !== 'dts') {

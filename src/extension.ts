@@ -923,11 +923,10 @@ class DTSEngine implements
 
         if (entry.nameLoc.range.contains(position)) {
             const results: vscode.MarkdownString[] = [];
-            if (type.compatible) {
-                results.push(new vscode.MarkdownString(type.compatible));
-            }
             if (type.description) {
                 results.push(new vscode.MarkdownString(type.description));
+            } else if (type.compatible) {
+                results.push(new vscode.MarkdownString(type.compatible));
             }
 
             results.push(new vscode.MarkdownString('`' + node.path + '`'));

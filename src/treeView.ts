@@ -6,7 +6,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { DTSCtx, DTSFile, Node, Parser, PHandle, Property} from './dts';
-import { countText } from './util';
+import { countText, sizeString } from './util';
 import { resolveBoardInfo } from './zephyr';
 
 function iconPath(name: string) {
@@ -286,23 +286,7 @@ export class DTSTreeView implements
     }
 
     private flashOverview(ctx: DTSCtx) {
-
         const flash = new TreeInfoItem(ctx, 'Flash', 'flash');
-        const sizeString = size => {
-            const spec = [
-                { size: 1024 * 1024 * 1024, name: 'GB' },
-                { size: 1024 * 1024, name: 'MB' },
-                { size: 1024, name: 'kB' },
-                { size: 1, name: 'B' },
-            ].find(spec => Math.abs(size) >= spec.size && !(size % spec.size));
-
-            if (size % spec.size) {
-                return (size / spec.size).toFixed(3) + ' ' + spec.name;
-            }
-
-            return (size / spec.size).toString() + ' ' + spec.name;
-        };
-
         ctx.nodeArray()
             .filter(n => n.parent && n.type.is('fixed-partitions'))
             .forEach((n, _, all) => {

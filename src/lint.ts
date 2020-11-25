@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import { getPHandleCells, NodeEntry, Node, ArrayValue, IntValue, PHandle, StringValue, DTSCtx, Property, Expression } from './dts';
 import * as types from './types';
 import { DiagnosticsSet } from './diags';
-import { countText } from './util';
+import { countText, sizeString } from './util';
 
 export type LintCtx = { ctx: DTSCtx, types: types.TypeLoader, diags: DiagnosticsSet, gpioControllers: Node[], labels: {[name: string]: Node} };
 
@@ -466,8 +466,12 @@ function lintNode(node: Node, ctx: LintCtx) {
                     const diag = ctx.diags.pushLoc(reg.addrs[0].loc, `Partition starts outside flash area`);
                     diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(flash[0].addrs[0].loc, 'Flash area defined here')];
                 }
-                if (reg.addrs[0].val + reg.sizes[0].val >= flash[0].addrs[0].val + flash[0].sizes[0].val) {
-                    const diag = ctx.diags.pushLoc(reg.sizes[0].loc, `Partition exceeds flash area`);
+
+                const flashEnd = flash[0].addrs[0].val + flash[0].sizes[0].val;
+                const partitionEnd = reg.addrs[0].val + reg.sizes[0].val;
+                const distance = partitionEnd - flashEnd;
+                if (distance > 0) {
+                    const diag = ctx.diags.pushLoc(reg.sizes[0].loc, `Partition exceeds flash area by ${sizeString(distance)}`);
                     diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(flash[0].addrs[0].loc, 'Flash area defined here')];
                 }
             });

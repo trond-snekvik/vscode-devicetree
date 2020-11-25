@@ -8,7 +8,7 @@ import * as assert from 'assert';
 import { after } from 'mocha';
 import * as path from 'path';
 import * as fs from 'fs';
-import { preprocess, Macro, MacroInstance, Line } from '../preprocessor';
+import { preprocess, Define, MacroInstance, Line, toDefines } from '../preprocessor';
 import { evaluateExpr } from '../util';
 import { DiagnosticsSet } from '../diags';
 
@@ -26,21 +26,21 @@ suite('Parser test suite', () => {
 		const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(inputFile));
 		const diags = new DiagnosticsSet();
 
-		let [lines, macros, includes] = await preprocess(doc, [], [], diags);
+		let result = await preprocess(doc, {}, [], diags);
 		if (BAKE_OUTPUT) {
-			fs.writeFileSync(extensionDevelopmentPath + '/src/test/output.h', lines.map(l => l.text).join('\n'));
+			fs.writeFileSync(extensionDevelopmentPath + '/src/test/output.h', result.lines.map(l => l.text).join('\n'));
 		}
 
 		const expected = fs.readFileSync(extensionDevelopmentPath + '/src/test/output.h', 'utf-8').split(/\r?\n/g);
-		assert.equal(lines.length, expected.length);
+		assert.equal(result.lines.length, expected.length);
 
-		lines.forEach((l, i) => {
+		result.lines.forEach((l, i) => {
 			assert.equal(l.text.trim(), expected[i].trim());
 		});
 
-		[lines, macros, includes] = await preprocess(doc, [new Macro('TEST_DIAGS', ''), new Macro('TEST_VALID_DIRECTIVES', '')], [], diags);
+		result = await preprocess(doc, toDefines([new Define('TEST_DIAGS', ''), new Define('TEST_VALID_DIRECTIVES', '')]), [], diags);
 		assert.equal(diags.length, 0, diags.toString());
-		[lines, macros, includes] = await preprocess(doc, [new Macro('TEST_DIAGS', ''), new Macro('TEST_INVALID_DIRECTIVES', '')], [], diags);
+		result = await preprocess(doc, toDefines([new Define('TEST_DIAGS', ''), new Define('TEST_INVALID_DIRECTIVES', '')]), [], diags);
 	});
 
 	test('Nested macros', async () => {
@@ -70,9 +70,9 @@ suite('Parser test suite', () => {
 		`});
 		const diags = new DiagnosticsSet();
 
-		const [lines, macros, includes] = await preprocess(doc, [], [], diags);
+		const result = await preprocess(doc, {}, [], diags);
 		assert.equal(diags.all.length, 0, diags.all.toString());
-		lines.filter(line => line.text.includes('==')).map(line => {
+		result.lines.filter(line => line.text.includes('==')).map(line => {
 			const actual = line.text.split('==')[0].trim();
 			const expected = line.raw.split('==')[1].trim();
 			// console.log(`${actual} == ${expected}`);
@@ -82,8 +82,8 @@ suite('Parser test suite', () => {
 
 	test('Line remap', () => {
 		const line = new Line('foo MACRO_1 MACRO_2 abc', 0, vscode.Uri.file('test'), [
-			new MacroInstance(new Macro('MACRO_1', 'bar'), 'MACRO_1', 'bar', 4),
-			new MacroInstance(new Macro('MACRO_2', '1234'), 'MACRO_2', '1234', 12),
+			new MacroInstance(new Define('MACRO_1', 'bar'), 'MACRO_1', 'bar', 4),
+			new MacroInstance(new Define('MACRO_2', '1234'), 'MACRO_2', '1234', 12),
 		]);
 
 		assert.equal(line.text, 'foo bar 1234 abc');

@@ -5,18 +5,16 @@
  */
 import * as vscode from 'vscode';
 import { DiagnosticsSet } from './diags';
-import { Macro, IncludeStatement, Line } from './preprocessor';
+import { Line } from './preprocessor';
 
 type Offset = { line: number, col: number };
 
 export class ParserState {
     readonly token = /^[#-\w]+|./;
-    macros: Macro[];
+    readonly lines: Line[];
     private offset: Offset;
     private prevRange: { start: Offset, length: number };
     diags: DiagnosticsSet;
-    includes: IncludeStatement[];
-    lines: Line[];
     uri: vscode.Uri;
 
     location(start?: Offset, end?: Offset) {
@@ -189,13 +187,11 @@ export class ParserState {
         }).join('\n');
     }
 
-    constructor(uri: vscode.Uri, diags: DiagnosticsSet, lines: Line[], macros: Macro[], includes: IncludeStatement[]) {
+    constructor(uri: vscode.Uri, diags: DiagnosticsSet, lines: Line[]) {
         this.uri = uri;
         this.diags = diags;
         this.offset = {line: 0, col: 0};
         this.prevRange = { start: this.offset, length: 0 };
         this.lines = lines;
-        this.includes = includes;
-        this.macros = macros;
     }
 }

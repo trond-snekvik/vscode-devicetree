@@ -1143,7 +1143,7 @@ class DTSEngine implements
             }
         }
 
-        const macros = this.parser.ctx(document.uri)?.macros.map(m => {
+        const defines = Object.values(this.parser.ctx(document.uri)?.defines ?? {}).map(m => {
             const item = new vscode.CompletionItem(m.name);
             if (m.args) {
                 item.kind = vscode.CompletionItemKind.Function;
@@ -1161,7 +1161,7 @@ class DTSEngine implements
                 item.detail = 'Define';
             }
 
-            if (item.label.startsWith('_')) { // Reserved macros go last
+            if (item.label.startsWith('_')) { // Reserved defines go last
                 item.sortText = `~~~~${item.label}`;
             } else {
                 item.sortText = `~~~${item.label}`;
@@ -1183,7 +1183,7 @@ class DTSEngine implements
             root.documentation = 'The devicetree has a single root node of which all other device nodes are descendants. The full path to the root node is /.';
             root.preselect = true;
 
-            return [root, ...labelItems('node'), ...macros];
+            return [root, ...labelItems('node'), ...defines];
         }
 
         const propValueTemplate = (value: string, propType: string | string[]) => {
@@ -1386,7 +1386,7 @@ class DTSEngine implements
             deleteProp,
             ...childCompletions,
             ...nodeCompletions,
-            ...macros,
+            ...defines,
         ];
     }
 

@@ -11,8 +11,14 @@ import { evaluateExpr } from './util';
 
 export type IncludeStatement = { loc: vscode.Location, dst: vscode.Uri };
 
-type Output = [Line[], Macro[], IncludeStatement[]];
-type Defines = { [name: string]: Macro };
+export type Defines = { [name: string]: Define };
+export type ProcessedFile = { lines: Line[], defines: Defines, includes: IncludeStatement[] };
+
+export function toDefines(list: Define[]): Defines {
+    const defines: Defines = {};
+    list.forEach(m => defines[m.name] = m);
+    return defines;
+}
 
 function replace(text: string, macros: MacroInstance[]) {
     // Replace values from back to front:
@@ -159,7 +165,7 @@ function findReplacements(text: string, defines: Defines, loc: vscode.Location):
     return macros;
 }
 
-export class Macro {
+export class Define {
     private _value: string;
     name: string;
     args?: string[]
@@ -182,7 +188,7 @@ export class Macro {
     }
 }
 
-export class LineMacro extends Macro {
+export class LineMacro extends Define {
     value(loc: vscode.Location) {
         return (loc.range.start.line + 1).toString();
     }
@@ -192,7 +198,7 @@ export class LineMacro extends Macro {
     }
 }
 
-export class FileMacro extends Macro {
+export class FileMacro extends Define {
     private cwd: string;
 
     value(loc: vscode.Location) {
@@ -205,7 +211,7 @@ export class FileMacro extends Macro {
     }
 }
 
-export class CounterMacro extends Macro {
+export class CounterMacro extends Define {
     private number = 0;
 
     value(loc: vscode.Location) {
@@ -221,13 +227,17 @@ export class MacroInstance {
     raw: string;
     insert: string;
     start: number;
-    macro: Macro;
+    macro: Define;
 
-    constructor(macro: Macro, raw: string, insert: string, start: number) {
+    constructor(macro: Define, raw: string, insert: string, start: number) {
         this.macro = macro;
         this.raw = raw;
         this.insert = insert;
         this.start = start;
+    }
+
+    contains(col: number) {
+        return col >= this.start && col < this.start + this.raw.length;
     }
 }
 
@@ -254,7 +264,7 @@ function evaluate(text: string, loc: vscode.Location, defines: Defines, diagSet:
     return 0;
 }
 
-export async function preprocess(doc: vscode.TextDocument, defines: Macro[], includes: string[], diags: DiagnosticsSet): Promise<Output> {
+export async function preprocess(doc: vscode.TextDocument, defines: Defines, includes: string[], diags: DiagnosticsSet): Promise<ProcessedFile> {
     const pushLineDiag = (line: Line, message: string, severity: vscode.DiagnosticSeverity=vscode.DiagnosticSeverity.Warning) => {
         const diag = new vscode.Diagnostic(line.location.range, message, severity);
         diags.push(line.uri, diag);
@@ -262,23 +272,21 @@ export async function preprocess(doc: vscode.TextDocument, defines: Macro[], inc
     };
 
     const timeStart = process.hrtime();
-    const macros: Defines = {
-        '__FILE__': new FileMacro(path.dirname(doc.uri.fsPath)),
-        '__LINE__': new LineMacro(),
-        '__COUNTER__': new CounterMacro(),
-    };
-    defines.forEach(d => macros[d.name] = d);
-
-    const result = {
+    const result: ProcessedFile = {
         lines: new Array<Line>(),
-        macros: new Array<Macro>(),
+        defines: <Defines>{
+            '__FILE__': new FileMacro(path.dirname(doc.uri.fsPath)),
+            '__LINE__': new LineMacro(),
+            '__COUNTER__': new CounterMacro(),
+            ...defines,
+        },
         includes: new Array<IncludeStatement>(),
     };
 
     let rawLines = readLines(doc);
     if (rawLines === null) {
         diags.push(doc.uri, new vscode.Diagnostic(new vscode.Range(0, 0, 0, 0), 'Unable to read file', vscode.DiagnosticSeverity.Error));
-        return Promise.resolve([result.lines, result.macros, result.includes]);
+        return result;
     }
 
     const scopes: {line: Line, condition: boolean}[] = [];
@@ -322,10 +330,10 @@ export async function preprocess(doc: vscode.TextDocument, defines: Macro[], inc
                     }
 
                     value = value.replace(new RegExp(`defined\\((.*?)\\)`, 'g'), (t, define) => {
-                        return macros[define]?.isDefined ? '1' : '0';
+                        return result.defines[define]?.isDefined ? '1' : '0';
                     });
 
-                    scopes.push({line: line, condition: !!evaluate(value, line.location, macros, diags)});
+                    scopes.push({line: line, condition: !!evaluate(value, line.location, result.defines, diags)});
                     continue;
                 }
 
@@ -336,7 +344,7 @@ export async function preprocess(doc: vscode.TextDocument, defines: Macro[], inc
                         continue;
                     }
 
-                    scopes.push({ line: line, condition: macros[value]?.isDefined });
+                    scopes.push({ line: line, condition: result.defines[value]?.isDefined });
                     continue;
                 }
 
@@ -347,7 +355,7 @@ export async function preprocess(doc: vscode.TextDocument, defines: Macro[], inc
                         continue;
                     }
 
-                    scopes.push({ line: line, condition: !macros[value]?.isDefined });
+                    scopes.push({ line: line, condition: !result.defines[value]?.isDefined });
                     continue;
                 }
 
@@ -379,12 +387,12 @@ export async function preprocess(doc: vscode.TextDocument, defines: Macro[], inc
                         continue;
                     }
 
-                    let condition = resolve(value, macros, line.location);
+                    let condition = resolve(value, result.defines, line.location);
                     condition = condition.replace(new RegExp(`defined\\((.*?)\\)`, 'g'), (t, define) => {
-                        return macros[define]?.isDefined ? '1' : '0';
+                        return result.defines[define]?.isDefined ? '1' : '0';
                     });
 
-                    scopes[scopes.length - 1].condition = evaluate(condition, line.location, macros, diags);
+                    scopes[scopes.length - 1].condition = evaluate(condition, line.location, result.defines, diags);
                     continue;
                 }
 
@@ -410,16 +418,15 @@ export async function preprocess(doc: vscode.TextDocument, defines: Macro[], inc
                         continue;
                     }
 
-                    const existing = macros[define[1]];
+                    const existing = result.defines[define[1]];
                     if (existing && !existing.undef) {
                         pushLineDiag(line, 'Duplicate definition');
                         continue;
                     }
 
-                    const macro = existing ?? new Macro(define[1], define[3], line, define[2]?.split(',').map(a => a.trim()));
+                    const macro = existing ?? new Define(define[1], define[3], line, define[2]?.split(',').map(a => a.trim()));
                     macro.undef = undefined;
-                    result.macros.push(macro);
-                    macros[macro.name] = macro;
+                    result.defines[macro.name] = macro;
                     continue;
                 }
 
@@ -430,7 +437,7 @@ export async function preprocess(doc: vscode.TextDocument, defines: Macro[], inc
                         continue;
                     }
 
-                    const define = macros[undef[0]];
+                    const define = result.defines[undef[0]];
                     if (!define || define.undef) {
                         pushLineDiag(line, 'Unknown define');
                         continue;
@@ -500,7 +507,7 @@ export async function preprocess(doc: vscode.TextDocument, defines: Macro[], inc
                 continue;
             }
 
-            result.lines.push(new Line(text, line.number, line.uri, findReplacements(text, macros, line.location)));
+            result.lines.push(new Line(text, line.number, line.uri, findReplacements(text, result.defines, line.location)));
         } catch (e) {
             pushLineDiag(line, 'Preprocessor crashed: ' + e);
         }
@@ -511,9 +518,8 @@ export async function preprocess(doc: vscode.TextDocument, defines: Macro[], inc
     const procTime = process.hrtime(timeStart);
     // console.log(`Preprocessed ${doc.uri.fsPath} in ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
 
-    return Promise.resolve([result.lines, result.macros, result.includes]);
+    return result;
 }
-
 
 export class Line {
     raw: string;
@@ -588,6 +594,10 @@ export class Line {
 
     get uri() {
         return this.location.uri;
+    }
+
+    macro(pos: vscode.Position) {
+        return this.macros.find(m => m.contains(pos.character));
     }
 
     constructor(raw: string, number: number, uri: vscode.Uri, macros: MacroInstance[]=[]) {

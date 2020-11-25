@@ -6,7 +6,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as zephyr from './zephyr';
-import { Macro, preprocess, IncludeStatement, Line } from './preprocessor';
+import { Define, preprocess, Defines, ProcessedFile } from './preprocessor';
 import { DiagnosticsSet } from './diags';
 import { NodeType, TypeLoader } from './types';
 import { ParserState } from './parser';
@@ -860,125 +860,6 @@ export class Property {
     }
 }
 
-export class OffsetRange {
-    doc: vscode.TextDocument;
-    start: number;
-    length: number;
-
-    constructor(doc: vscode.TextDocument, start: number, length?: number) {
-        this.doc = doc;
-        this.start = start;
-        this.length = length || 0;
-    }
-
-    toRange(): vscode.Range {
-        return new vscode.Range(this.doc.positionAt(this.start), this.doc.positionAt(this.start + this.length));
-    }
-
-    contains(pos: vscode.Position, doc: vscode.TextDocument) {
-        return this.doc.uri.fsPath === doc.uri.fsPath && this.toRange().contains(pos);
-    }
-
-    containsRange(r: OffsetRange) {
-        return this.doc.uri.fsPath === r.doc.uri.fsPath && this.start <= r.start && ((this.start + this.length) >= (r.start + r.length));
-    }
-
-    extendTo(offset: number) {
-        this.length = offset - this.start;
-    }
-}
-
-export class DTSFile {
-    uri: vscode.Uri;
-    lines: Line[];
-    roots: NodeEntry[];
-    entries: NodeEntry[];
-    includes: IncludeStatement[];
-    macros: Macro[];
-    diags: DiagnosticsSet;
-    dirty=true;
-    priority: number;
-    ctx: DTSCtx;
-
-    constructor(uri: vscode.Uri, ctx: DTSCtx) {
-        this.uri = uri;
-        this.diags = new DiagnosticsSet();
-        this.ctx = ctx;
-        this.priority = ctx.fileCount;
-        this.lines = [];
-        this.roots = [];
-        this.entries = [];
-        this.includes = [];
-        this.macros = [];
-    }
-
-    remove() {
-        this.entries.forEach(e => {
-            e.node.entries = e.node.entries.filter(nodeEntry => nodeEntry !== e);
-        });
-        this.entries = [];
-        this.dirty = true;
-    }
-
-    has(uri: vscode.Uri) {
-        return (
-            this.uri.toString() === uri.toString() ||
-            this.includes.find(include => uri.toString() === include.dst.toString()));
-    }
-
-    getNodeAt(pos: vscode.Position, uri: vscode.Uri): Node {
-        return this.getEntryAt(pos, uri)?.node;
-    }
-
-    getEntryAt(pos: vscode.Position, uri: vscode.Uri): NodeEntry {
-        const entries = this.entries.filter(e => e.loc.uri.fsPath === uri.fsPath && e.loc.range.contains(pos));
-        if (entries.length === 0) {
-            return undefined;
-        }
-
-        /* When multiple nodes are matching, they extend each other,
-         * and the one with the longest path is the innermost child.
-         */
-        return entries.sort((a, b) => b.node.path.length - a.node.path.length)[0];
-    }
-
-    getPropertyAt(pos: vscode.Position, uri: vscode.Uri): Property {
-        return this.getEntryAt(pos, uri)?.getPropertyAt(pos, uri);
-    }
-
-    addNode(path: string, properties: { [name: string]: string } = {}) {
-        if (path.endsWith('/')) {
-            path = path.slice(0, path.length);
-        }
-
-        const newComponents = [];
-        let existing: NodeEntry;
-        const p = path.split('/');
-        while (p.length) {
-            const fullPath = p.join('/');
-            existing = this.entries.find(e => e.node.path === fullPath);
-            if (existing) {
-                break;
-            }
-
-            p.pop();
-            newComponents.push(fullPath);
-        }
-
-        while (!existing && newComponents.length) {
-            const component = newComponents.pop();
-            const node = this.ctx.node(component);
-            if (!node) {
-                return; // Assert?
-            }
-
-            if (node.labels().length > 0 || !node.parent) {
-                existing = new NodeEntry(null, node, null, this, this.entries.length);
-            }
-        }
-    }
-}
-
 export class NodeEntry {
     node: Node;
     children: NodeEntry[];
@@ -1212,6 +1093,72 @@ export class Node {
     }
 }
 
+export class DTSFile {
+    readonly uri: vscode.Uri;
+    readonly ctx: DTSCtx;
+    processed?: ProcessedFile;
+    roots: NodeEntry[];
+    entries: NodeEntry[];
+    diags: DiagnosticsSet;
+    dirty=true;
+    priority: number;
+
+    constructor(uri: vscode.Uri, ctx: DTSCtx) {
+        this.uri = uri;
+        this.diags = new DiagnosticsSet();
+        this.ctx = ctx;
+        this.priority = ctx.fileCount;
+        this.roots = [];
+        this.entries = [];
+    }
+
+    get defines() {
+        return this.processed?.defines ?? {};
+    }
+
+    get includes() {
+        return this.processed?.includes ?? [];
+    }
+
+    get lines() {
+        return this.processed?.lines ?? [];
+    }
+
+    remove() {
+        this.entries.forEach(e => {
+            e.node.entries = e.node.entries.filter(nodeEntry => nodeEntry !== e);
+        });
+        this.entries = [];
+        this.dirty = true;
+    }
+
+    has(uri: vscode.Uri) {
+        return (
+            this.uri.toString() === uri.toString() ||
+            this.includes.find(include => uri.toString() === include.dst.toString()));
+    }
+
+    getNodeAt(pos: vscode.Position, uri: vscode.Uri): Node {
+        return this.getEntryAt(pos, uri)?.node;
+    }
+
+    getEntryAt(pos: vscode.Position, uri: vscode.Uri): NodeEntry {
+        const entries = this.entries.filter(e => e.loc.uri.fsPath === uri.fsPath && e.loc.range.contains(pos));
+        if (entries.length === 0) {
+            return undefined;
+        }
+
+        /* When multiple nodes are matching, they extend each other,
+         * and the one with the longest path is the innermost child.
+         */
+        return entries.sort((a, b) => b.node.path.length - a.node.path.length)[0];
+    }
+
+    getPropertyAt(pos: vscode.Position, uri: vscode.Uri): Property {
+        return this.getEntryAt(pos, uri)?.getPropertyAt(pos, uri);
+    }
+}
+
 export class DTSCtx {
     overlays: DTSFile[];
     boardFile: DTSFile;
@@ -1390,13 +1337,8 @@ export class DTSCtx {
         return [...this.overlays];
     }
 
-    get macros() {
-        const macros = new Array<Macro>();
-        if (this.boardFile) {
-            macros.push(...this.boardFile.macros);
-        }
-        this.overlays.forEach(c => macros.push(...c?.macros));
-        return macros;
+    get defines() {
+        return this.files.map(file => file.processed?.defines).reduce((defines, add) => defines = { ...defines, ...add }, <Defines>{});
     }
 
     get roots() {
@@ -1436,7 +1378,7 @@ export class DTSCtx {
 
 export class Parser {
     private includes: string[];
-    private defines: {[name: string]: string};
+    private defines: Defines;
     private boards: { [board: string]: zephyr.Board };
     private appCtx: DTSCtx[];
     private boardCtx: DTSCtx[]; // Raw board contexts, for when the user just opens a .dts or .dtsi file without any overlay
@@ -1453,7 +1395,7 @@ export class Parser {
 
     constructor(defines: {[name: string]: string}, includes: string[], types: TypeLoader) {
         this.includes = includes;
-        this.defines = defines;
+        this.defines = {};
         this.types = types;
         this.boards = {};
         this.appCtx = [];
@@ -1464,6 +1406,8 @@ export class Parser {
         this.onOpen = this.openEmitter.event;
         this.deleteEmitter = new vscode.EventEmitter();
         this.onDelete = this.deleteEmitter.event;
+
+        Object.entries(defines).forEach(([name, value]) => this.defines[name] = new Define(name, value));
 
         zephyr.modules.forEach(m => {
             this.includes.push(m + '/include');
@@ -1733,12 +1677,10 @@ export class Parser {
 
     private async parse(ctx: DTSCtx, doc: vscode.TextDocument): Promise<DTSFile> {
         const file = new DTSFile(doc.uri, ctx);
-        const preprocessed = await preprocess(doc, ctx.macros, [...this.includes, ...ctx.includes], file.diags);
-        const state = new ParserState(doc.uri, file.diags, ...preprocessed);
+        const processed = await preprocess(doc, {...this.defines, ...ctx.defines}, [...this.includes, ...ctx.includes], file.diags);
+        const state = new ParserState(doc.uri, file.diags, processed.lines);
 
-        file.includes = state.includes;
-        file.lines = state.lines;
-        file.macros = state.macros;
+        file.processed = processed;
         let entries = 0;
         const timeStart = process.hrtime();
         const nodeStack: NodeEntry[] = [];

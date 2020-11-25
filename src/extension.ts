@@ -1351,19 +1351,21 @@ class DTSEngine implements
                     completion.kind = vscode.CompletionItemKind.TypeParameter;
                 }
 
+                // Put the properties at the top:
+                completion.sortText = '   ' + completion.label;
+                completion.documentation = new vscode.MarkdownString();
+                completion.documentation.appendText(p.description ?? '');
+                if (p.required) {
+                    completion.documentation.appendMarkdown(`\n\n*This property is required.*`);
+                }
+
                 const nodeProp = nodeProps.find(prop => prop.name === p.name);
                 if (nodeProp) {
-                    const md = new vscode.MarkdownString();
-                    md.appendText(p.description ?? '');
-                    md.appendMarkdown(`\n\n*Already defined as:*`);
-                    md.appendCodeblock(nodeProp.toString(), 'dts');
-                    completion.documentation = md;
-                    // Not quite at the top:
-                    completion.sortText = '!!!' + completion.label;
+                    completion.documentation.appendMarkdown(`\n\n*Already defined as:*`);
+                    completion.documentation.appendCodeblock(nodeProp.toString(), 'dts');
                 } else {
-                    // Put the unused properties at the top:
-                    completion.sortText = '!!!!' + completion.label;
-                    completion.documentation = p.description ?? '';
+                    // Put the unused properties at the very top:
+                    completion.sortText = ' ' + completion.sortText;
                 }
 
                 completion.insertText = new vscode.SnippetString();

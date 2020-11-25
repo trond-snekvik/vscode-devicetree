@@ -514,7 +514,7 @@ export class DTSTreeView implements
     private ioChannelOverview(type: 'ADC' | 'DAC', ctx: DTSCtx) {
         const nodes = ctx.nodeArray();
         const adcs = new TreeInfoItem(ctx, type + 's', type.toLowerCase());
-        nodes.filter(node => node.type?.is('adc-controller')).forEach(node => {
+        nodes.filter(node => node.type?.is(type.toLowerCase() + '-controller')).forEach(node => {
             const controller = new TreeInfoItem(ctx, node.uniqueName);
             controller.path = node.path;
             controller.tooltip = node.type?.description;

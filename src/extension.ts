@@ -150,6 +150,10 @@ class DTSDocumentProvider implements vscode.TextDocumentContentProvider {
 
 }
 
+function toCIdentifier(name: string) {
+    return name.toLowerCase().replace(/[@,-]/g, '_').replace(/[#&]/g, '');
+}
+
 class CSupport implements vscode.CompletionItemProvider {
     parser: dts.Parser;
 
@@ -177,8 +181,6 @@ class CSupport implements vscode.CompletionItemProvider {
         if (!macro) {
             return;
         }
-
-        const toCIdentifier = (name: string) => name.toLowerCase().replace(/[@,-]/g, '_').replace(/[#&]/g, '');
 
         let suggestions: {text: string, node?: dts.Node, prop?: dts.Property}[];
         switch(macro[1]) {
@@ -528,12 +530,20 @@ class DTSEngine implements
                 return;
             }
 
-            const toMacro = (text: string) => text.replace(/[-@]/g, '_').replace(/\/|^#/g, '').toLowerCase();
-
             const nodeMacro = (node: dts.Node) => {
                 const labels = node.labels();
                 if (labels.length) {
-                    return `DT_NODELABEL(${toMacro(labels[0])})`;
+                    return `DT_NODELABEL(${toCIdentifier(labels[0])})`;
+                }
+
+                const alias = ctx.node('/alias/')?.properties().find(p => p.pHandle?.is(node));
+                if (alias) {
+                    return `DT_ALIAS(${toCIdentifier(alias.pHandle.val)})`
+                }
+
+                const chosen = ctx.node('/chosen/')?.properties().find(p => p.pHandle?.is(node));
+                if (chosen) {
+                    return `DT_CHOSEN(${toCIdentifier(alias.pHandle.val)})`
                 }
 
                 if (node.parent) {
@@ -541,13 +551,13 @@ class DTSEngine implements
 
                     // better to do DT_PATH(a, b, c) than DT_CHILD(DT_CHILD(a, b), c)
                     if (!parent.startsWith('DT_NODELABEL(')) {
-                        return `DT_PATH(${toMacro(node.path.slice(1, node.path.length - 1).replace(/\//g, ', '))})`;
+                        return `DT_PATH(${toCIdentifier(node.path.slice(1, node.path.length - 1).replace(/\//g, ', '))})`;
                     }
 
-                    return `DT_CHILD(${parent}, ${toMacro(node.fullName)})`;
+                    return `DT_CHILD(${parent}, ${toCIdentifier(node.fullName)})`;
                 }
 
-                return `DT_N`;
+                return `DT_ROOT`;
             };
 
             const propMacro = (prop: dts.Property) => {
@@ -562,19 +572,23 @@ class DTSEngine implements
                         return;
                     }
 
-                    return `DT_PROP(${nodeMacro(prop.entry.node)}, ${toMacro(prop.name)})`;
+                    return `DT_PROP(${nodeMacro(prop.entry.node)}, ${toCIdentifier(prop.name)})`;
                 }
 
-                // Selecting a phandle:
+                // Selecting a phandle. Should return the property reference, not the node or cell that's being pointed to,
+                // so that if the value changes, the reference will still be valid.
                 const val = prop.valueAt(selection.start, uri);
                 if (val instanceof dts.ArrayValue) {
                     const cell = val.cellAt(selection.start, uri);
                     if (cell instanceof dts.PHandle) {
-                        const node = ctx.node(cell.val);
-                        if (node) {
-                            return nodeMacro(node);
+                        if (prop.value.length > 1) {
+                            return `DT_PHANDLE_BY_IDX(${nodeMacro(prop.entry.node)}, ${toCIdentifier(prop.name)}, ${prop.value.indexOf(val)})`;
                         }
-                    } else if (prop.name === 'reg') {
+
+                        return `DT_PHANDLE(${nodeMacro(prop.entry.node)}, ${toCIdentifier(prop.name)})`;
+                    }
+
+                    if (prop.name === 'reg') {
                         const valIdx = prop.value.indexOf(val);
                         const cellIdx = val.val.indexOf(cell);
                         const names = prop.cellNames(ctx);
@@ -584,22 +598,24 @@ class DTSEngine implements
                                 if (prop.regs?.length === 1) {
                                     // Name is either size or addr
                                     return `DT_REG_${name.toUpperCase()}(${nodeMacro(prop.entry.node)})`;
-                                } else {
-                                    // Name is either size or addr
-                                    return `DT_REG_${name.toUpperCase()}_BY_IDX(${nodeMacro(prop.entry.node)}, ${valIdx})`;
                                 }
+
+                                // Name is either size or addr
+                                return `DT_REG_${name.toUpperCase()}_BY_IDX(${nodeMacro(prop.entry.node)}, ${valIdx})`;
                             }
                         }
-                    } else if (val.isNumberArray()) {
+                    }
+
+                    if (val.isNumberArray()) {
                         const cellIdx = val.val.indexOf(cell);
                         return `DT_PROP_BY_IDX(${nodeMacro(prop.entry.node)}, ${prop.name}, ${cellIdx})`;
-                    } else {
-                        const names = prop.cellNames(ctx);
-                        if (names?.length) {
-                            const idx = val.val.indexOf(cell);
-                            if (idx >= 0) {
-                                return `DT_PROP(${nodeMacro(prop.entry.node)}, ${toMacro(prop.name)})`;
-                            }
+                    }
+
+                    const names = prop.cellNames(ctx);
+                    if (names?.length) {
+                        const idx = val.val.indexOf(cell);
+                        if (idx >= 0) {
+                            return `DT_PROP(${nodeMacro(prop.entry.node)}, ${toCIdentifier(prop.name)})`;
                         }
                     }
                 }

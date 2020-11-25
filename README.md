@@ -116,6 +116,15 @@ The DeviceTree bindings are described in yaml files. This extension provides a s
 
 ![Bindings completion](doc/bindings.png)
 
+### C file macro argument completion
+
+The extension will use data from the most recent DeviceTree context to provide completion items for the arguments of the following macros in C:
+
+- `DT_ALIAS`
+- `DT_NODELABEL`
+- `DT_PATH`
+- `DT_CHOSEN`
+
 ## Installation
 
 The extension can be installed from the Visual Studio Extension marketplace.

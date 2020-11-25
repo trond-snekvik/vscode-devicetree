@@ -33,7 +33,6 @@ This extension is an independent community contribution, and is not part of the 
 - Code completion for bindings files (depends on [Red Hat's YAML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml))
 - Code completion for certain `DT_...` macros in C
 - Linting language rules
-  - Redundant properties
   - Required properties
   - Reference validity
   - Phandle cell formats

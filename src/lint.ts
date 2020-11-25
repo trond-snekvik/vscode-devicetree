@@ -447,9 +447,7 @@ function lintNode(node: Node, ctx: LintCtx) {
         const cs = node.parent.property('cs-gpios');
         if (reg === undefined) {
             node.entries.forEach(e => ctx.diags.pushLoc(e.loc, `SPI devices must have a register property on the format < 1 >`, vscode.DiagnosticSeverity.Error));
-        } else if (!cs?.pHandleArray) {
-            node.parent.entries.forEach(e => ctx.diags.pushLoc(e.nameLoc, `Missing cs-gpios property. Required for nodes on spi bus.`, vscode.DiagnosticSeverity.Error));
-        } else if (cs.pHandleArray.length <= reg) {
+        } else if (cs?.pHandleArray && cs.pHandleArray.length <= reg) {
             node.entries.forEach(e => {
                 const diag = ctx.diags.pushLoc(e.nameLoc, `No cs-gpios entry for SPI device ${reg}`, vscode.DiagnosticSeverity.Error);
                 diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(cs.loc, `SPI bus cs-gpios property declared here`)];
@@ -472,7 +470,7 @@ function lintNode(node: Node, ctx: LintCtx) {
                     const diag = ctx.diags.pushLoc(reg.sizes[0].loc, `Partition exceeds flash area`);
                     diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(flash[0].addrs[0].loc, 'Flash area defined here')];
                 }
-            })
+            });
         });
     }
 

@@ -191,6 +191,9 @@ class CSupport implements vscode.CompletionItemProvider {
             case 'PATH':
                 suggestions = Object.values(ctx.nodes).map(node => ({ text: toCIdentifier(node.path.slice(1, node.path.length - 1)).replace(/\//g, ', '), node }));
                 break;
+            case 'CHOSEN':
+                suggestions = ctx.node('/chosen/')?.properties().map(prop => ({ text: toCIdentifier(prop.name), node: ctx.node(prop.pHandle?.toString(true)) }));
+                break;
             default:
                 return;
         }

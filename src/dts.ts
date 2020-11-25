@@ -75,6 +75,11 @@ export class IntValue extends PropertyValue {
         const number = state.match(/^(0x[\da-fA-F]+|\d+)[uUlL]*\b/);
         if (number) {
             const loc = state.location();
+            // If the raw value is a macro, we'll show that when printing a human readable version:
+            if (state.getLine(loc.uri, loc.range.start)?.macro(loc.range.start)?.insert !== number[0]) {
+                return new IntValue(number[0], parseInt(number[1]), loc);
+            }
+
             const raw = state.raw(loc);
             return new IntValue(raw, parseInt(number[1]), loc);
         }
@@ -104,30 +109,33 @@ export class Expression extends IntValue {
         let level = 1;
         let text = '(';
         while (level !== 0) {
-            m = state.match(/^(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+/*-]|\s*|0x[\da-fA-F]+|[\d.]+|'.')\s*)*([()])/);
+            m = state.match(/^\s*(?:(?:<<|>>|&&|\|\||[!=<>]=|[|&~^<>!=+/*-]|\s*|0x[\da-fA-F]+|[\d.]+|'.')\s*)*([()])/);
             if (!m) {
                 state.pushDiag(`Unterminated expression`, vscode.DiagnosticSeverity.Error);
                 break;
             }
 
-            // JS doesn't support single-character arithmetic, so we need to convert those to numbers first:
-            const part = m[0].replace(/'(.)'/g, (_, char: string) => char.charCodeAt(0).toString());
-
-            text += part;
+            text += m[0];
             if (m[1] === '(') {
                 level++;
             } else {
                 level--;
             }
-
-            state.skipWhitespace();
         }
 
         const loc = state.location(start);
-        const raw = state.raw(loc);
 
         try {
-            return new Expression(raw, eval(text), loc);
+            // JS doesn't support single-character arithmetic, so we need to convert those to numbers first:
+            const value = eval(text.replace(/'(.)'/g, (_, char: string) => char.charCodeAt(0).toString()));
+            // If the raw value is a macro, we'll show that when printing a human readable version:
+            const macroExpansion = state.getLine(loc.uri, loc.range.start)?.macro(loc.range.start)?.insert.trim();
+            if (macroExpansion && macroExpansion !== text.trim()) {
+                return new Expression(text, value, loc);
+            }
+
+            const raw = state.raw(loc);
+            return new Expression(raw, value, loc);
         } catch (e) {
             state.pushDiag(`Unable to evaluate expression`, vscode.DiagnosticSeverity.Error, loc);
         }

@@ -1389,7 +1389,8 @@ export class Parser {
     onOpen: vscode.Event<DTSCtx>;
     private deleteEmitter: vscode.EventEmitter<DTSCtx>;
     onDelete: vscode.Event<DTSCtx>;
-    currCtx?: DTSCtx;
+    private _currCtx?: DTSCtx;
+    private inDTS: boolean;
     private isStable = true;
     private waiters = new Array<() => void>();
 
@@ -1432,6 +1433,20 @@ export class Parser {
         }
 
         return this.contexts.find(ctx => ctx.has(uri));
+    }
+
+    set currCtx(ctx: DTSCtx) {
+        this._currCtx = ctx;
+    }
+
+    get currCtx() {
+        if (this.inDTS) {
+            return this._currCtx;
+        }
+    }
+
+    get lastCtx() {
+        return this._currCtx;
     }
 
     async stable(): Promise<void> {
@@ -1545,7 +1560,7 @@ export class Parser {
         this.appCtx = this.appCtx.filter(c => c !== ctx);
         this.boardCtx = this.boardCtx.filter(c => c !== ctx);
         if (this.currCtx === ctx) {
-            this.currCtx = null;
+            this._currCtx = null;
         }
 
         this.deleteEmitter.fire(ctx);
@@ -1556,6 +1571,7 @@ export class Parser {
             return;
         }
 
+        this.inDTS = true;
         this.currCtx = this.ctx(doc.uri);
         if (this.currCtx) {
             return this.currCtx;
@@ -1640,20 +1656,18 @@ export class Parser {
     }
 
     private async onDidChangetextEditor(editor?: vscode.TextEditor) {
-        if (editor?.document?.languageId === 'dts') {
+        this.inDTS = editor?.document?.languageId === 'dts';
+        if (this.inDTS) {
             const ctx = this.ctx(editor.document.uri);
             if (ctx) {
                 this.currCtx = ctx;
                 if (ctx.dirty.length) {
                     this.reparse(ctx);
                 }
-
                 return;
             }
 
             this.currCtx = await this.onDidOpen(editor.document);
-        } else {
-            this.currCtx = null;
         }
     }
 

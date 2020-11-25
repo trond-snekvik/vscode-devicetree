@@ -174,7 +174,7 @@ export class ArrayValue extends PropertyValue {
                 continue;
             }
 
-            const unbracedExpression = state.match(/^([+|!^-]|&&|<<|>>|==)/);
+            const unbracedExpression = state.match(/^([+*/|!^-]|&&|<<|>>|==)/);
             if (unbracedExpression) {
                 state.pushDiag(`Expression without a surrounding parenthesis`, vscode.DiagnosticSeverity.Error);
                 continue;

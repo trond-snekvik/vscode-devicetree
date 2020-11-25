@@ -407,7 +407,7 @@ function parsePropValue(state: ParserState) {
     return elems;
 }
 
-export type PHandleEntry = { target: PHandle, cells: (IntValue | Expression)[] };
+type PHandleEntry = { target: PHandle, cells: (IntValue | Expression)[] };
 
 export class Property {
     name: string;
@@ -1342,21 +1342,11 @@ export class DTSCtx {
     }
 
     get roots() {
-        const roots = new Array<NodeEntry>();
-        if (this.boardFile) {
-            roots.push(...this.boardFile.roots);
-        }
-        this.overlays.forEach(c => roots.push(...c?.roots));
-        return roots;
+        return this.files.flatMap(c => c?.roots);
     }
 
     get entries() {
-        const entries = new Array<NodeEntry>();
-        if (this.boardFile) {
-            entries.push(...this.boardFile.entries);
-        }
-        this.overlays.forEach(c => entries.push(...c?.entries));
-        return entries;
+        return this.files.flatMap(c => c?.entries);
     }
 
     get properties() {

@@ -7,10 +7,12 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { env } from 'process';
 import { ExecOptions, exec } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import * as glob from 'glob';
+import * as yaml from 'js-yaml';
 
-export type Board = { name: string, path: string, arch?: string }
+export type BoardInfo = { identifier: string, name: string, type: string, arch: string, toolchain: string[], ram: number, flash: number, supported: string[] };
+export type Board = { name: string, path: string, arch?: string, info?: BoardInfo | {} };
 const conf = vscode.workspace.getConfiguration();
 export let zephyrRoot: string;
 let westExe: string;
@@ -157,4 +159,18 @@ export async function activate(ctx: vscode.ExtensionContext) {
 			}
 		}));
 	});
+}
+
+export function resolveBoardInfo(board: Board) {
+	const file = path.join(path.dirname(board.path), board.name + '.yaml');
+	if (!existsSync(file)) {
+		return;
+	}
+
+	const out = readFileSync(file, 'utf-8');
+	if (!out) {
+		return;
+	}
+
+	board.info = <BoardInfo>yaml.load(out, { json: true }) || {};
 }

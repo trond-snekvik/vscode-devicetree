@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { DTSCtx, DTSFile, Node, Parser, PHandle, Property} from './dts';
 import { countText } from './util';
+import { resolveBoardInfo } from './zephyr';
 
 function iconPath(name: string) {
     return {
@@ -205,6 +206,43 @@ export class DTSTreeView implements
         } catch (e) {
             console.log(e);
             return [];
+        }
+    }
+
+    private boardOverview(ctx: DTSCtx) {
+        const board = new TreeInfoItem(ctx, 'Board', 'circuit-board');
+
+        if (!ctx.board) {
+            return;
+        }
+
+        if (!ctx.board.info) {
+            resolveBoardInfo(ctx.board);
+            if (!ctx.board.info) {
+                return;
+            }
+        }
+
+        Object.entries({
+            name: 'Name:',
+            arch: 'Architecture:',
+            supported: 'Supported features',
+            toolchain: 'Supported toolchains',
+        }).forEach(([field, name]) => {
+            if (ctx.board.info[field]) {
+                const item = new TreeInfoItem(ctx, name, undefined);
+                if (Array.isArray(ctx.board.info[field])) {
+                    (<string[]>ctx.board.info[field]).forEach(i => item.addChild(new TreeInfoItem(ctx, i)));
+                } else {
+                    item.description = ctx.board.info[field].toString();
+                }
+
+                board.addChild(item);
+            }
+        });
+
+        if (board.children) {
+            return board;
         }
     }
 
@@ -556,6 +594,7 @@ export class DTSTreeView implements
 
     private getOverviewTree(ctx: DTSCtx): vscode.ProviderResult<DTSTreeItem[]> {
         const details = new TreeInfoItem(ctx, 'Overview');
+        details.addChild(this.boardOverview(ctx));
         details.addChild(this.gpioOverview(ctx));
         details.addChild(this.flashOverview(ctx));
         details.addChild(this.interruptOverview(ctx));

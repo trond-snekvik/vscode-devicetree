@@ -44,9 +44,11 @@ class TreeInfoItem {
         return this.name;
     }
 
-    addChild(child: TreeInfoItem) {
-        child.parent = this;
-        this._children.push(child);
+    addChild(child: TreeInfoItem | undefined) {
+        if (child) {
+            child.parent = this;
+            this._children.push(child);
+        }
     }
 }
 
@@ -206,11 +208,9 @@ export class DTSTreeView implements
         }
     }
 
-    private getOverviewTree(ctx: DTSCtx): vscode.ProviderResult<DTSTreeItem[]> {
-        const details = new TreeInfoItem(ctx, 'Overview');
-        const nodes = ctx.nodeArray();
+    private gpioOverview(ctx: DTSCtx) {
         const gpio = new TreeInfoItem(ctx, 'GPIO', 'gpio');
-        nodes.filter(n => n.pins).forEach((n, _, all) => {
+        ctx.nodeArray().filter(n => n.pins).forEach((n, _, all) => {
             const controller = new TreeInfoItem(ctx, n.uniqueName);
             n.pins.forEach((p, i) => {
                 if (p) {
@@ -241,9 +241,12 @@ export class DTSTreeView implements
             gpio.addChild(controller);
         });
 
-        if (gpio.children.length) {
-            details.addChild(gpio);
+        if (gpio.children) {
+            return gpio;
         }
+    }
+
+    private flashOverview(ctx: DTSCtx) {
 
         const flash = new TreeInfoItem(ctx, 'Flash', 'flash');
         const sizeString = size => {
@@ -261,7 +264,7 @@ export class DTSTreeView implements
             return (size / spec.size).toString() + ' ' + spec.name;
         };
 
-        nodes
+        ctx.nodeArray()
             .filter(n => n.parent && n.type.is('fixed-partitions'))
             .forEach((n, _, all) => {
                 let parent = flash;
@@ -313,7 +316,7 @@ export class DTSTreeView implements
 
         // Some devices don't have partitions defined. For these, show simple flash entries:
         if (!flash.children.length) {
-            nodes.filter(n => n.type?.is('soc-nv-flash')).forEach((n, _, all) => {
+            ctx.nodeArray().filter(n => n.type?.is('soc-nv-flash')).forEach((n, _, all) => {
                 let parent = flash;
                 if (all.length > 1) {
                     parent = new TreeInfoItem(ctx, n.uniqueName);
@@ -338,10 +341,13 @@ export class DTSTreeView implements
         }
 
         if (flash.children.length) {
-            details.addChild(flash);
+            return flash;
         }
+    }
 
-        const interrupts = new TreeInfoItem(ctx, 'Interrupts', 'interrupts');
+    private interruptOverview(ctx: DTSCtx) {
+        const nodes = ctx.nodeArray();
+        let interrupts = new TreeInfoItem(ctx, 'Interrupts', 'interrupts');
         const controllers = nodes.filter(n => n.property('interrupt-controller'));
         const controllerItems = controllers.map(n => ({ item: new TreeInfoItem(ctx, n.uniqueName), children: new Array<{ node: Node, interrupts: Property }>() }));
         nodes.filter(n => n.property('interrupts')).forEach(n => {
@@ -391,24 +397,25 @@ export class DTSTreeView implements
 
             controller.item.path = controllers[i].path;
             controller.item.tooltip = controllers[i].type?.description;
-
-            if (controllers.length > 1) {
-                interrupts.addChild(controller.item);
-            } else {
-                // Skip second depth if there's just one interrupt controller
-                controller.item.description = controller.item.name;
-                controller.item.name = interrupts.name;
-                controller.item.icon = interrupts.icon;
-                details.addChild(controller.item);
-            }
+            interrupts.addChild(controller.item);
         });
 
-        if (interrupts.children.length) {
-            details.addChild(interrupts);
+        // Skip second depth if there's just one interrupt controller
+        if (interrupts.children.length === 1) {
+            interrupts.children[0].icon = interrupts.icon;
+            interrupts.children[0].description = interrupts.children[0].name;
+            interrupts.children[0].name = interrupts.name;
+            return interrupts.children[0];
         }
 
+        if (interrupts.children.length) {
+            return interrupts;
+        }
+    }
+
+    private busOverview(ctx: DTSCtx) {
         const buses = new TreeInfoItem(ctx, 'Buses', 'bus');
-        nodes.filter(node => node.type?.bus).forEach(node => {
+        ctx.nodeArray().filter(node => node.type?.bus).forEach(node => {
             const bus = new TreeInfoItem(ctx, node.uniqueName, undefined, '');
             if (!bus.name.toLowerCase().includes(node.type.bus.toLowerCase())) {
                 bus.description = node.type.bus + ' ';
@@ -461,14 +468,17 @@ export class DTSTreeView implements
         });
 
         if (buses.children.length) {
-            details.addChild(buses);
+            return buses;
         }
+    }
 
-        const adcs = new TreeInfoItem(ctx, 'ADCs', 'adc');
+    private ioChannelOverview(type: 'ADC' | 'DAC', ctx: DTSCtx) {
+        const nodes = ctx.nodeArray();
+        const adcs = new TreeInfoItem(ctx, type + 's', type.toLowerCase());
         nodes.filter(node => node.type?.is('adc-controller')).forEach(node => {
-            const adc = new TreeInfoItem(ctx, node.uniqueName);
-            adc.path = node.path;
-            adc.tooltip = node.type?.description;
+            const controller = new TreeInfoItem(ctx, node.uniqueName);
+            controller.path = node.path;
+            controller.tooltip = node.type?.description;
             nodes
             .filter(n => n.property('io-channels')?.entries?.some(entry => (entry.target instanceof PHandle) && entry.target.is(node)))
             .flatMap(usr => {
@@ -479,59 +489,30 @@ export class DTSTreeView implements
             .forEach(channel => {
                 const entry = new TreeInfoItem(ctx, `Channel ${channel.idx}`, undefined, channel.node.uniqueName + (channel.name ? ` • ${channel.name}` : ''));
                 entry.path = channel.node.path;
-                adc.addChild(entry);
+                controller.addChild(entry);
             });
 
-            if (!adc.children.length) {
-                adc.addChild(new TreeInfoItem(ctx, '', undefined, 'No channels in use.'));
+            if (!controller.children.length) {
+                controller.addChild(new TreeInfoItem(ctx, '', undefined, 'No channels in use.'));
             }
 
-            adcs.addChild(adc);
+            adcs.addChild(controller);
         });
 
         if (adcs.children.length === 1) {
             adcs.children[0].icon = adcs.icon;
             adcs.children[0].description = adcs.children[0].name;
             adcs.children[0].name = adcs.name;
-            details.addChild(adcs.children[0]);
-        } else if (adcs.children.length) {
-            details.addChild(adcs);
+            return adcs.children[0];
         }
 
-        const dacs = new TreeInfoItem(ctx, 'DACs', 'dac');
-        nodes.filter(node => node.type?.is('dac-controller')).forEach(node => {
-            const dac = new TreeInfoItem(ctx, node.uniqueName);
-            dac.path = node.path;
-            dac.tooltip = node.type?.description;
-            nodes
-            .filter(n => n.property('io-channels')?.entries?.some(entry => (entry.target instanceof PHandle) && entry.target.is(node)))
-            .flatMap(usr => {
-                const names = usr.property('io-channel-names')?.stringArray ?? [];
-                return usr.property('io-channels').entries.filter(c => c.target.is(node)).map((channel, i, all) => ({node: usr, idx: channel.cells[0]?.val ?? -1, name: names[i] ?? ((all.length > 1) && i.toString())}));
-            })
-            .sort((a, b) => a.idx - b.idx)
-            .forEach(channel => {
-                const entry = new TreeInfoItem(ctx, `Channel ${channel.idx}`, undefined, channel.node.uniqueName + (channel.name ? ` • ${channel.name}` : ''));
-                entry.path = channel.node.path;
-                dac.addChild(entry);
-            });
-
-            if (!dac.children.length) {
-                dac.addChild(new TreeInfoItem(ctx, '', undefined, 'No channels in use.'));
-            }
-
-            dacs.addChild(dac);
-        });
-
-        if (dacs.children.length === 1) {
-            dacs.children[0].icon = dacs.icon;
-            dacs.children[0].description = dacs.children[0].name;
-            dacs.children[0].name = dacs.name;
-            details.addChild(dacs.children[0]);
-        } else if (dacs.children.length) {
-            details.addChild(dacs);
+        if (adcs.children.length) {
+            return adcs;
         }
+    }
 
+    private clockOverview(ctx: DTSCtx) {
+        const nodes = ctx.nodeArray();
         const clocks = new TreeInfoItem(ctx, 'Clocks', 'clock');
         nodes.filter(node => node.type?.is('clock-controller')).forEach(node => {
             const clock = new TreeInfoItem(ctx, node.uniqueName);
@@ -565,12 +546,24 @@ export class DTSTreeView implements
             clocks.children[0].icon = clocks.icon;
             clocks.children[0].description = clocks.children[0].name;
             clocks.children[0].name = clocks.name;
-            details.addChild(clocks.children[0]);
-        } else if (clocks.children.length) {
-            details.addChild(clocks);
+            return clocks.children[0];
         }
 
-        /////////////////////////////
+        if (clocks.children.length) {
+            return clocks;
+        }
+    }
+
+    private getOverviewTree(ctx: DTSCtx): vscode.ProviderResult<DTSTreeItem[]> {
+        const details = new TreeInfoItem(ctx, 'Overview');
+        details.addChild(this.gpioOverview(ctx));
+        details.addChild(this.flashOverview(ctx));
+        details.addChild(this.interruptOverview(ctx));
+        details.addChild(this.busOverview(ctx));
+        details.addChild(this.ioChannelOverview('ADC', ctx));
+        details.addChild(this.ioChannelOverview('DAC', ctx));
+        details.addChild(this.clockOverview(ctx));
+
         if (details.children.length) {
             return [details, ...ctx.files];
         }
@@ -582,7 +575,6 @@ export class DTSTreeView implements
         if (element instanceof DTSCtx) {
             return;
         }
-
     }
 }
 

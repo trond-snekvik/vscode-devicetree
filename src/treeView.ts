@@ -97,7 +97,8 @@ export class DTSTreeView implements
             .map(i => (<NestedInclude>{ uri: i.dst, file }));
     }
 
-    getTreeItem(element: DTSTreeItem): vscode.TreeItem | Thenable<vscode.TreeItem> {
+    async getTreeItem(element: DTSTreeItem): Promise<vscode.TreeItem> {
+        await this.parser.stable();
         try {
             if (element instanceof DTSCtx) {
                 let file: DTSFile;

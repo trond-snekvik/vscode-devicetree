@@ -150,6 +150,68 @@ class DTSDocumentProvider implements vscode.TextDocumentContentProvider {
 
 }
 
+class CSupport implements vscode.CompletionItemProvider {
+    parser: dts.Parser;
+
+    constructor(parser: dts.Parser) {
+        this.parser = parser;
+    }
+
+    activate(ctx: vscode.ExtensionContext) {
+        ctx.subscriptions.push(vscode.languages.registerCompletionItemProvider({ language: 'c', scheme: 'file' }, this));
+    }
+
+    provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.CompletionContext): vscode.ProviderResult<vscode.CompletionItem[]> {
+        const ctx = this.parser.lastCtx;
+        if (!ctx) {
+            return;
+        }
+
+        const before = document.getText(new vscode.Range(position.line, 0, position.line, position.character));
+        // Early exit:
+        if (!before.includes('DT_')) {
+            return;
+        }
+
+        const macro = before.match(/DT_(\w+)\((\w*)$/);
+        if (!macro) {
+            return;
+        }
+
+        const toCIdentifier = (name: string) => name.toLowerCase().replace(/[@,-]/g, '_').replace(/[#&]/g, '');
+
+        let suggestions: {text: string, node?: dts.Node, prop?: dts.Property}[];
+        switch(macro[1]) {
+            case 'ALIAS':
+                suggestions = ctx.node('/aliases/')?.properties().map(prop => ({ text: toCIdentifier(prop.name), node: ctx.node(prop.pHandle?.toString(true)) }));
+                break;
+            case 'NODELABEL':
+                suggestions = Object.values(ctx.nodes).flatMap(node => node.labels().map(l => (<typeof suggestions[0]>{ text: toCIdentifier(l), node })));
+                break;
+            case 'PATH':
+                suggestions = Object.values(ctx.nodes).map(node => ({ text: toCIdentifier(node.path.slice(1, node.path.length - 1)).replace(/\//g, ', '), node }));
+                break;
+            default:
+                return;
+        }
+
+        return suggestions.map(suggestion => {
+            const item = new vscode.CompletionItem(suggestion.text, suggestion.node ? vscode.CompletionItemKind.Class : vscode.CompletionItemKind.Property);
+            item.sortText = '  ' + item.label;
+
+            if (suggestion.node) {
+                item.detail = suggestion.node.uniqueName;
+                item.documentation = suggestion.node.type?.description;
+            } else if (suggestion.prop) {
+                item.detail = suggestion.prop.name;
+                item.documentation = suggestion.prop.entry.node.type?.property(suggestion.prop.name)?.description;
+            }
+
+            return item;
+        });
+    }
+}
+
 type StoredCtx = { name: string, boardFile: string, overlays: string[], board: zephyr.Board };
 
 class DTSEngine implements
@@ -169,6 +231,7 @@ class DTSEngine implements
     types: types.TypeLoader;
     prevDiagUris: vscode.Uri[] = [];
     treeView: DTSTreeView;
+    cSupport: CSupport;
 
     constructor() {
         this.diags = vscode.languages.createDiagnosticCollection('DeviceTree');
@@ -201,6 +264,7 @@ class DTSEngine implements
         });
 
         this.treeView = new DTSTreeView(this.parser);
+        this.cSupport = new CSupport(this.parser);
     }
 
     /** Returns all pHandle references to the node under cursor.  */
@@ -293,6 +357,7 @@ class DTSEngine implements
         console.log(`Found ${Object.keys(this.types.types).length} bindings in ${bindingDirs.join(', ')}. ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
         await this.loadCtxs();
         this.parser.activate(ctx);
+        this.cSupport.activate(ctx);
 
         vscode.window.onDidChangeActiveTextEditor(async editor => {
             if (editor?.document?.languageId !== 'dts') {

@@ -337,7 +337,7 @@ function lintNode(node: Node, ctx: LintCtx) {
                 const diag = ctx.diags.pushLoc(prop.valueLoc, `Label "${prop.string}" already used by ${ctx.labels[prop.string].uniqueName}.\nLabels must be unique to be unambigously accesible by device_get_binding()`);
                 diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(ctx.labels[prop.string].entries[0]?.loc, `${ctx.labels[prop.string].uniqueName} defined here`)];
             } else {
-                ctx.labels[prop.string] = prop.entry.node;
+                ctx.labels[prop.string] = prop.node;
             }
         }
     });
@@ -675,7 +675,7 @@ export function gatherPins(n: Node, ctx: LintCtx) {
         if (pin >= ctrl.pins.length) {
             ctx.diags.pushLoc(prop.loc, `No pin ${pin} of ${ctrl.uniqueName}`, vscode.DiagnosticSeverity.Warning);
         } else if (ctrl.pins[pin]) {
-            const diag = ctx.diags.pushLoc(prop.loc, `Pin ${pin} of ${ctrl.uniqueName} already assigned to ${ctrl.pins[pin].prop.entry.node.path}${ctrl.pins[pin].prop.name}`, vscode.DiagnosticSeverity.Information);
+            const diag = ctx.diags.pushLoc(prop.loc, `Pin ${pin} of ${ctrl.uniqueName} already assigned to ${ctrl.pins[pin].prop.node.path}${ctrl.pins[pin].prop.name}`, vscode.DiagnosticSeverity.Information);
             diag.relatedInformation = [new vscode.DiagnosticRelatedInformation(ctrl.pins[pin].prop.loc, "Overlapping assignment")];
         } else {
             ctrl.pins[pin] = { prop, cells, pinmux };

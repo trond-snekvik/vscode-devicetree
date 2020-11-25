@@ -427,7 +427,11 @@ export class Property {
     }
 
     get path() {
-        return this.entry.node.path + this.name;
+        return this.node.path + this.name;
+    }
+
+    get node() {
+        return this.entry.node;
     }
 
     toString(indent=0): string {
@@ -611,8 +615,8 @@ export class Property {
 
         const entries = new Array<{ addrs: IntValue[], sizes: IntValue[] }>();
 
-        const addrCells = this.entry.node.parent?.addrCells() ?? 2;
-        const sizeCells = this.entry.node.parent?.sizeCells() ?? 1;
+        const addrCells = this.node.parent?.addrCells() ?? 2;
+        const sizeCells = this.node.parent?.sizeCells() ?? 1;
 
         val.forEach(v => {
             for (let i = 0; i + addrCells + sizeCells <= v.val.length; i += sizeCells) {
@@ -696,7 +700,7 @@ export class Property {
             return [];
         }
 
-        return this.entry.node.property(this.name.slice(0, this.name.length - 1) + '-names')?.stringArray ?? [];
+        return this.node.property(this.name.slice(0, this.name.length - 1) + '-names')?.stringArray ?? [];
     }
 
     /* Get the expected cellnames for this property. */
@@ -710,21 +714,21 @@ export class Property {
             const contents = arr.val;
 
             if (this.name === 'reg') {
-                const addrCells = this.entry.node.parent?.addrCells() ?? 2;
-                const sizeCells = this.entry.node.parent?.sizeCells() ?? 1;
+                const addrCells = this.node.parent?.addrCells() ?? 2;
+                const sizeCells = this.node.parent?.sizeCells() ?? 1;
                 return [...Array(addrCells).fill('addr'), ...Array(sizeCells).fill('size')];
             }
 
             if (this.name === 'ranges') {
-                const addrCells = this.entry.node.addrCells();
-                const parentAddrCells = this.entry.node.parent?.addrCells() ?? 2;
-                const sizeCells = this.entry.node.sizeCells();
+                const addrCells = this.node.addrCells();
+                const parentAddrCells = this.node.parent?.addrCells() ?? 2;
+                const sizeCells = this.node.sizeCells();
                 return [...Array(addrCells).fill('child-addr'), ...Array(parentAddrCells).fill('parent-addr'), ...Array(sizeCells).fill('size')];
             }
 
             // Get cells from parents:
             if (this.name.endsWith('s')) {
-                const parentName = this.entry.node.parent?.property(this.name.slice(0, this.name.length - 1) + '-parent')?.pHandle?.val;
+                const parentName = this.node.parent?.property(this.name.slice(0, this.name.length - 1) + '-parent')?.pHandle?.val;
                 if (parentName) {
                     const parent = ctx.node(parentName);
                     const cellCount = parent?.cellCount(this.name);
@@ -741,7 +745,7 @@ export class Property {
                 const inputCells = contents.findIndex(v => v instanceof PHandle);
                 if (inputCells >= 0) {
                     if (this.name === 'interrupt-map') {
-                        const interruptSpec = new Array(this.entry.node.property('#interrupt-cells')?.number ?? 0).fill('irq-in');
+                        const interruptSpec = new Array(this.node.property('#interrupt-cells')?.number ?? 0).fill('irq-in');
                         const addrNames = new Array(inputCells - interruptSpec.length).fill('addr-in');
                         const refNode = ctx.node(contents[inputCells]?.val as string);
                         if (refNode) {
@@ -754,7 +758,7 @@ export class Property {
 
                     } else {
                         const inputNames = new Array(inputCells).fill('input');
-                        this.entry.node.refCellNames(this.name)?.slice(0, inputCells).forEach((c, i) => inputNames[i] = c);
+                        this.node.refCellNames(this.name)?.slice(0, inputCells).forEach((c, i) => inputNames[i] = c);
                         const outputNames = ctx.node(contents[inputCells]?.val as string)?.refCellNames(this.name) ?? [];
                         return [...inputNames, '&target', ...outputNames];
                     }

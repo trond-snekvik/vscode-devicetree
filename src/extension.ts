@@ -209,7 +209,7 @@ class CSupport implements vscode.CompletionItemProvider {
                 item.documentation = suggestion.node.type?.description;
             } else if (suggestion.prop) {
                 item.detail = suggestion.prop.name;
-                item.documentation = suggestion.prop.entry.node.type?.property(suggestion.prop.name)?.description;
+                item.documentation = suggestion.prop.node.type?.property(suggestion.prop.name)?.description;
             }
 
             return item;
@@ -564,7 +564,7 @@ class DTSEngine implements
                 // Selecting the property name
                 if (prop.loc.range.contains(selection)) {
                     if (prop.name === 'label') {
-                        return `DT_LABEL(${nodeMacro(prop.entry.node)})`;
+                        return `DT_LABEL(${nodeMacro(prop.node)})`;
                     }
 
                     // Not generated for properties like #gpio-cells
@@ -572,7 +572,7 @@ class DTSEngine implements
                         return;
                     }
 
-                    return `DT_PROP(${nodeMacro(prop.entry.node)}, ${toCIdentifier(prop.name)})`;
+                    return `DT_PROP(${nodeMacro(prop.node)}, ${toCIdentifier(prop.name)})`;
                 }
 
                 // Selecting a phandle. Should return the property reference, not the node or cell that's being pointed to,
@@ -582,10 +582,10 @@ class DTSEngine implements
                     const cell = val.cellAt(selection.start, uri);
                     if (cell instanceof dts.PHandle) {
                         if (prop.value.length > 1) {
-                            return `DT_PHANDLE_BY_IDX(${nodeMacro(prop.entry.node)}, ${toCIdentifier(prop.name)}, ${prop.value.indexOf(val)})`;
+                            return `DT_PHANDLE_BY_IDX(${nodeMacro(prop.node)}, ${toCIdentifier(prop.name)}, ${prop.value.indexOf(val)})`;
                         }
 
-                        return `DT_PHANDLE(${nodeMacro(prop.entry.node)}, ${toCIdentifier(prop.name)})`;
+                        return `DT_PHANDLE(${nodeMacro(prop.node)}, ${toCIdentifier(prop.name)})`;
                     }
 
                     if (prop.name === 'reg') {
@@ -597,25 +597,25 @@ class DTSEngine implements
                             if (name) {
                                 if (prop.regs?.length === 1) {
                                     // Name is either size or addr
-                                    return `DT_REG_${name.toUpperCase()}(${nodeMacro(prop.entry.node)})`;
+                                    return `DT_REG_${name.toUpperCase()}(${nodeMacro(prop.node)})`;
                                 }
 
                                 // Name is either size or addr
-                                return `DT_REG_${name.toUpperCase()}_BY_IDX(${nodeMacro(prop.entry.node)}, ${valIdx})`;
+                                return `DT_REG_${name.toUpperCase()}_BY_IDX(${nodeMacro(prop.node)}, ${valIdx})`;
                             }
                         }
                     }
 
                     if (val.isNumberArray()) {
                         const cellIdx = val.val.indexOf(cell);
-                        return `DT_PROP_BY_IDX(${nodeMacro(prop.entry.node)}, ${prop.name}, ${cellIdx})`;
+                        return `DT_PROP_BY_IDX(${nodeMacro(prop.node)}, ${prop.name}, ${cellIdx})`;
                     }
 
                     const names = prop.cellNames(ctx);
                     if (names?.length) {
                         const idx = val.val.indexOf(cell);
                         if (idx >= 0) {
-                            return `DT_PROP(${nodeMacro(prop.entry.node)}, ${toCIdentifier(prop.name)})`;
+                            return `DT_PROP(${nodeMacro(prop.node)}, ${toCIdentifier(prop.name)})`;
                         }
                     }
                 }
@@ -690,7 +690,7 @@ class DTSEngine implements
 
             const prop = ctx.getPropertyAt(selection.start, uri);
             if (prop) {
-                editNode(prop.entry.node, prop.name + ' = ');
+                editNode(prop.node, prop.name + ' = ');
             } else {
                 const entry = ctx.getEntryAt(selection.start, uri);
                 if (entry?.nameLoc.range.contains(selection.start)) {
@@ -812,7 +812,7 @@ class DTSEngine implements
                     return;
                 }
 
-                if (prop.entry.node.name === 'aliases' || prop.entry.node.name === 'chosen') { // the string should be a path
+                if (prop.node.name === 'aliases' || prop.node.name === 'chosen') { // the string should be a path
                     const node = ctx.node(symbol);
                     if (!node) {
                         return;
@@ -930,7 +930,7 @@ class DTSEngine implements
                     nexusText.appendMarkdown(`Each entry in the nexus map defines one translation from \`${identifier}\` references to this node to the mapped node.`);
                     if (nexusMap.length) {
                         nexusText.appendMarkdown(`\n\nFor instance, because of the first entry in this map,`);
-                        nexusText.appendCodeblock(`${identifier}s = < ${p.entry.node.refName} ${nexusMap[0].in.map(i => i.toString(true)).join(' ')} >;`, 'dts');
+                        nexusText.appendCodeblock(`${identifier}s = < ${p.node.refName} ${nexusMap[0].in.map(i => i.toString(true)).join(' ')} >;`, 'dts');
                         nexusText.appendMarkdown(`is equivalent to`);
                         nexusText.appendCodeblock(`${identifier}s = < ${nexusMap[0].target.toString(true)} ${nexusMap[0].out.map(i => i.toString(true)).join(' ')} >;`, 'dts');
                     }
@@ -960,7 +960,7 @@ class DTSEngine implements
                         return `| ${i} | NC | - |\n`;
                     }
 
-                    return `| ${i} | \`${pin.prop.entry.node.uniqueName}\` | ${pin.prop.name} |\n`;
+                    return `| ${i} | \`${pin.prop.node.uniqueName}\` | ${pin.prop.name} |\n`;
                 }).join(''));
                 results.push(pins);
             }
@@ -1012,7 +1012,7 @@ class DTSEngine implements
         const prop = entry.getPropertyAt(position, document.uri);
         if (prop) {
             if (prop.loc.range.contains(position) && prop.loc.uri.toString() === document.uri.toString()) {
-                return prop.entry.node.uniqueProperties().find(p => p.name === prop.name)?.loc;
+                return prop.node.uniqueProperties().find(p => p.name === prop.name)?.loc;
             }
 
             const type = prop.valueAt(position, document.uri);
@@ -1486,7 +1486,7 @@ class DTSEngine implements
             return;
         }
 
-        const node = prop.entry.node;
+        const node = prop.node;
         if (!node.type) {
             return;
         }

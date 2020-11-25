@@ -255,14 +255,14 @@ export class DTSTreeView implements
                 if (p) {
                     const pin = new TreeInfoItem(ctx, `Pin ${i.toString()}`);
                     pin.path = p.prop.path;
-                    pin.tooltip = p.prop.entry.node.type?.description;
+                    pin.tooltip = p.prop.node.type?.description;
                     if (p.pinmux) {
                         const name = p.pinmux.name
-                            .replace((p.prop.entry.node.labels()[0] ?? p.prop.entry.node.name) + '_', '')
+                            .replace((p.prop.node.labels()[0] ?? p.prop.node.name) + '_', '')
                             .replace(/_?p[a-zA-Z]\d+$/, '');
-                        pin.description = `${p.prop.entry.node.uniqueName} • ${name}`;
+                        pin.description = `${p.prop.node.uniqueName} • ${name}`;
                     } else {
-                        pin.description = `${p.prop.entry.node.uniqueName} • ${p.prop.name}`;
+                        pin.description = `${p.prop.node.uniqueName} • ${p.prop.name}`;
                     }
                     controller.addChild(pin);
                 }

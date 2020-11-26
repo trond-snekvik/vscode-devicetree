@@ -1652,7 +1652,14 @@ export class Parser {
     private async onDidChangetextEditor(editor?: vscode.TextEditor) {
         this.inDTS = editor?.document?.languageId === 'dts';
         if (this.inDTS) {
-            const ctx = this.ctx(editor.document.uri);
+            let uri: vscode.Uri;
+            if (editor.document.uri.scheme === 'devicetree') {
+                uri = vscode.Uri.file(editor.document.uri.query);
+            } else {
+                uri = editor.document.uri;
+            }
+
+            const ctx = this.ctx(uri);
             if (ctx) {
                 this.currCtx = ctx;
                 if (ctx.dirty.length) {
@@ -1661,7 +1668,9 @@ export class Parser {
                 return;
             }
 
-            this.currCtx = await this.onDidOpen(editor.document);
+            if (editor.document.uri.scheme !== 'devicetree') {
+                this.currCtx = await this.onDidOpen(editor.document);
+            }
         }
     }
 

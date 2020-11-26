@@ -1046,7 +1046,7 @@ class DTSEngine implements
                 } else if (p.type === 'bytearray') {
                     surroundingBraces = ['[ ', ' ]'];
                 } else if (!Array.isArray(p.type)) {
-                    surroundingBraces = ['< ', ' >'];
+                    surroundingBraces = ['<', '>'];
                     if (p.type === 'int') {
                         defaultVal = '0';
                     } else if (p.type === 'phandle') {
@@ -1082,7 +1082,7 @@ class DTSEngine implements
                     } else {
                         snippet.appendText(' = ');
                         if (p.name === 'reg') {
-                            snippet.appendText('< ');
+                            snippet.appendText('<');
                             if (insertAddr) {
                                 snippet.appendText('0x');
                                 snippet.appendTabstop(2);
@@ -1105,7 +1105,7 @@ class DTSEngine implements
                         } else if (p.name === 'label') {
                             insertValueSnippet(p, item.label.toUpperCase());
                         } else if (p.type === 'phandle-array' && p.name.endsWith('-gpios') && defaultGpioController) {
-                            snippet.appendText('< ');
+                            snippet.appendText('<');
                             snippet.appendPlaceholder(`&${defaultGpioController.labels()[0] ?? '"' + defaultGpioController.path + '"'}`);
                             const cells = defaultGpioController.type?.cells(dts.cellName(p.name)) as string[];
                             if (cells) {
@@ -1118,7 +1118,7 @@ class DTSEngine implements
                                 snippet.appendPlaceholder('cells');
                             }
 
-                            snippet.appendText(' >');
+                            snippet.appendText('>');
                         } else {
                             insertValueSnippet(p, p.const ?? p.default ?? p.enum);
                         }
@@ -1542,7 +1542,7 @@ class DTSEngine implements
         text = text.replace(/(&[\w,-]+)\s*{[\t ]*/g, '$1 {');
         text = text.replace(/([\w,-]+)@0*([\da-fA-F]+)\s*{[\t ]*/g, '$1@$2 {');
         text = text.replace(/(\w+)\s*=\s*(".*?"|<.*?>|\[.*?\])\s*;/g, '$1 = $2;');
-        text = text.replace(/<\s*(.*?)\s*>/g, '< $1 >');
+        text = text.replace(/<\s*(.*?)\s*>/g, '<$1>');
         text = text.replace(/([;{])[ \t]+\r?\n/g, '$1' + eol);
         text = text.replace(/\[\s*((?:[\da-fA-F]{2}\s*)+)\s*\]/g, (_, contents: string) => `[ ${contents.replace(/([\da-fA-F]{2})\s*/g, '$1 ')} ]`);
         text = text.replace(/[ \t]+\r?\n/g, eol);

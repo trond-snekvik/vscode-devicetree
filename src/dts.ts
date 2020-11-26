@@ -94,7 +94,7 @@ export class IntValue extends PropertyValue {
             return this.raw;
         }
 
-        return `< ${this.raw} >`;
+        return `<${this.raw}>`;
     }
 }
 
@@ -146,7 +146,7 @@ export class Expression extends IntValue {
             return this.raw;
         }
 
-        return `< ${this.val} >`;
+        return `<${this.val}>`;
     }
 }
 
@@ -252,7 +252,7 @@ export class ArrayValue extends PropertyValue {
             return this.val[0].toString(raw);
         }
 
-        return `< ${this.val.map(v => v.toString(true)).join(' ')} >`;
+        return `<${this.val.map(v => v.toString(true)).join(' ')}>`;
     }
 }
 
@@ -335,9 +335,9 @@ export class PHandle extends PropertyValue {
     toString(raw=true) {
         switch (this.kind) {
         case 'ref':
-            return raw ? this.val : `< ${this.val} >`;
+            return raw ? this.val : `<${this.val}>`;
         case 'pathRef':
-            return raw ? `&{${this.val}}` : `< &{${this.val}} >`;
+            return raw ? `&{${this.val}}` : `<&{${this.val}}>`;
         case 'string':
             return `"${this.val}"`;
         case 'invalid':

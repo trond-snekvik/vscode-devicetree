@@ -14,6 +14,7 @@ import { DiagnosticsSet } from './diags';
 import { existsSync, readFile, writeFile, writeFileSync } from 'fs';
 import { DTSTreeView } from './treeView';
 import { capitalize } from './util';
+import { DTSDocumentProvider } from './compiledOutput';
 
 const config = vscode.workspace.getConfiguration('devicetree');
 
@@ -121,35 +122,6 @@ function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString,
     snippet.appendText(';');
 }
 
-class DTSDocumentProvider implements vscode.TextDocumentContentProvider {
-    private parser: dts.Parser;
-    private changeEmitter: vscode.EventEmitter<vscode.Uri>;
-    private currUri?: vscode.Uri;
-    onDidChange: vscode.Event<vscode.Uri>;
-
-    constructor(parser: dts.Parser) {
-        this.changeEmitter = new vscode.EventEmitter();
-        this.onDidChange = this.changeEmitter.event;
-        this.parser = parser;
-        this.parser.onChange(ctx => {
-            if (this.currUri && ctx.has(vscode.Uri.file(this.currUri.path))) {
-                this.changeEmitter.fire(this.currUri);
-            }
-        });
-    }
-
-    provideTextDocumentContent(uri: vscode.Uri, token: vscode.CancellationToken): vscode.ProviderResult<string> {
-        this.currUri = uri;
-        const ctx = this.parser.ctx(vscode.Uri.file(uri.path));
-        if (!ctx) {
-            return `/* Unable to resolve path ${uri.toString()} */`;
-        }
-
-        return ctx.toString();
-    }
-
-}
-
 function toCIdentifier(name: string) {
     return name.toLowerCase().replace(/[@,-]/g, '_').replace(/[#&]/g, '');
 }
@@ -237,6 +209,7 @@ class DTSEngine implements
     prevDiagUris: vscode.Uri[] = [];
     treeView: DTSTreeView;
     cSupport: CSupport;
+    compiledDocProvider: DTSDocumentProvider;
 
     constructor() {
         this.diags = vscode.languages.createDiagnosticCollection('DeviceTree');
@@ -270,10 +243,20 @@ class DTSEngine implements
 
         this.treeView = new DTSTreeView(this.parser);
         this.cSupport = new CSupport(this.parser);
+        this.compiledDocProvider = new DTSDocumentProvider(this.parser);
     }
 
     /** Returns all pHandle references to the node under cursor.  */
-    provideReferences(document: vscode.TextDocument, position: vscode.Position, context: vscode.ReferenceContext, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Location[]> {
+    async provideReferences(document: vscode.TextDocument, position: vscode.Position, context: vscode.ReferenceContext, token: vscode.CancellationToken): Promise<vscode.Location[]> {
+        if (this.compiledDocProvider.is(document.uri) && document.getWordRangeAtPosition(position)) {
+            const node = await this.compiledDocProvider.getEntity(position);
+            if (node instanceof dts.Node) {
+                return this.parser.ctx(vscode.Uri.file(this.compiledDocProvider.currUri.query))?.getReferences(node).map(r => r.loc);
+            }
+
+            return;
+        }
+
         const ctx = this.parser.ctx(document.uri);
         if (!ctx) {
             return;
@@ -383,30 +366,32 @@ class DTSEngine implements
             vscode.commands.executeCommand('setContext', 'devicetree:ctx.hasOverlay', ctx.overlays.length > 0);
         });
 
-        const selector = <vscode.DocumentFilter>{ language: 'dts', scheme: 'file' };
-        let disposable = vscode.languages.registerDocumentSymbolProvider(selector, this);
+        const realDTSFiles = <vscode.DocumentFilter>{ language: 'dts', scheme: 'file' };
+        const allDTSFiles = [realDTSFiles, <vscode.DocumentFilter>{ language: 'dts', scheme: 'devicetree' }];
+
+        let disposable = vscode.languages.registerDocumentSymbolProvider(allDTSFiles, this);
         ctx.subscriptions.push(disposable);
         disposable = vscode.languages.registerWorkspaceSymbolProvider(this);
         ctx.subscriptions.push(disposable);
-        disposable = vscode.languages.registerDefinitionProvider([selector, <vscode.DocumentFilter>{ language: 'yaml', scheme: 'file' }], this);
+        disposable = vscode.languages.registerDefinitionProvider([...allDTSFiles, <vscode.DocumentFilter>{ language: 'yaml', scheme: 'file' }], this);
         ctx.subscriptions.push(disposable);
-        disposable = vscode.languages.registerHoverProvider(selector, this);
+        disposable = vscode.languages.registerHoverProvider(allDTSFiles, this);
         ctx.subscriptions.push(disposable);
-        disposable = vscode.languages.registerCompletionItemProvider(selector, this, '&', '#', '<', '"', '\t');
+        disposable = vscode.languages.registerCompletionItemProvider(realDTSFiles, this, '&', '#', '<', '"', '\t');
         ctx.subscriptions.push(disposable);
-        disposable = vscode.languages.registerSignatureHelpProvider(selector, this, '<', ' ');
+        disposable = vscode.languages.registerSignatureHelpProvider(realDTSFiles, this, '<', ' ');
         ctx.subscriptions.push(disposable);
-        disposable = vscode.languages.registerDocumentRangeFormattingEditProvider(selector, this);
+        disposable = vscode.languages.registerDocumentRangeFormattingEditProvider(realDTSFiles, this);
         ctx.subscriptions.push(disposable);
-        disposable = vscode.languages.registerDocumentLinkProvider(selector, this);
+        disposable = vscode.languages.registerDocumentLinkProvider(realDTSFiles, this);
         ctx.subscriptions.push(disposable);
-        disposable = vscode.workspace.registerTextDocumentContentProvider('devicetree', new DTSDocumentProvider(this.parser));
+        disposable = vscode.workspace.registerTextDocumentContentProvider('devicetree', this.compiledDocProvider);
         ctx.subscriptions.push(disposable);
-        disposable = vscode.languages.registerCodeActionsProvider(selector, this);
+        disposable = vscode.languages.registerCodeActionsProvider(realDTSFiles, this);
         ctx.subscriptions.push(disposable);
-        disposable = vscode.languages.registerReferenceProvider(selector, this);
+        disposable = vscode.languages.registerReferenceProvider(allDTSFiles, this);
         ctx.subscriptions.push(disposable);
-        disposable = vscode.languages.registerTypeDefinitionProvider(selector, this);
+        disposable = vscode.languages.registerTypeDefinitionProvider(realDTSFiles, this);
         ctx.subscriptions.push(disposable);
 
         vscode.commands.registerCommand('devicetree.showOutput', (uri: dts.DTSCtx | vscode.Uri) => {
@@ -417,7 +402,7 @@ class DTSEngine implements
             }
 
             if (uri) {
-                vscode.window.showTextDocument(vscode.Uri.parse('devicetree://' + uri.path), { viewColumn: vscode.ViewColumn.Beside });
+                vscode.window.showTextDocument(vscode.Uri.parse(`devicetree://${path.dirname(uri.path)}/Compiled DeviceTree output (${path.basename(uri.fsPath, path.extname(uri.fsPath))})?${uri.path}`), { viewColumn: vscode.ViewColumn.Beside });
             }
         });
 
@@ -626,13 +611,22 @@ class DTSEngine implements
             };
 
             let macro: string;
-            const prop = ctx.getPropertyAt(selection.start, uri);
-            if (prop) {
-                macro = propMacro(prop);
+            if (this.compiledDocProvider.is(uri)) {
+                const entity = this.compiledDocProvider.getEntity(selection.start);
+                if (entity instanceof dts.Node) {
+                    macro = nodeMacro(entity);
+                } else if (entity instanceof dts.Property) {
+                    macro = propMacro(entity);
+                }
             } else {
-                const entry = ctx.getEntryAt(selection.start, uri);
-                if (entry?.nameLoc.range.contains(selection.start)) {
-                    macro = nodeMacro(entry.node);
+                const prop = ctx.getPropertyAt(selection.start, uri);
+                if (prop) {
+                    macro = propMacro(prop);
+                } else {
+                    const entry = ctx.getEntryAt(selection.start, uri);
+                    if (entry?.nameLoc.range.contains(selection.start)) {
+                        macro = nodeMacro(entry.node);
+                    }
                 }
             }
 
@@ -793,37 +787,34 @@ class DTSEngine implements
             .map(n => new vscode.SymbolInformation(n.fullName || '/', vscode.SymbolKind.Class, n.parent?.path ?? '', n.entries[0].nameLoc));
     }
 
-    getNodeDefinition(ctx: dts.DTSCtx, document: vscode.TextDocument, position: vscode.Position): [vscode.Range, dts.Node] {
-        let word = document.getWordRangeAtPosition(position, /&[\w-]+/);
-        if (word) {
-            const symbol = document.getText(word);
-            if (symbol.startsWith('&')) { // label
-                const node = ctx.node(symbol);
-                if (node) {
-                    return [word, node];
-                }
-            }
+    getEntityDefinition(file: dts.DTSFile, uri: vscode.Uri, position: vscode.Position): dts.Node | dts.Property {
+        const entry = file.getEntryAt(position, uri);
+        if (!entry) {
+            return;
         }
 
-        word = document.getWordRangeAtPosition(position, /"[\w,/@-]+"/);
-        if (word) {
-            let symbol = document.getText(word);
+        if (entry.nameLoc.uri.toString() === uri.toString() && entry.nameLoc.range.contains(position)) {
+            return entry.node;
+        }
 
-            if (symbol) {
-                symbol = symbol.slice(1, symbol.length - 1);
-                const prop = ctx.getPropertyAt(position, document.uri);
-                if (!prop) {
-                    return;
-                }
+        const prop = entry.getPropertyAt(position, uri);
+        if (!prop) {
+            return;
+        }
 
-                if (prop.node.name === 'aliases' || prop.node.name === 'chosen') { // the string should be a path
-                    const node = ctx.node(symbol);
-                    if (!node) {
-                        return;
-                    }
+        if (prop.loc.uri.toString() === uri.toString() && prop.loc.range.contains(position)) {
+            return prop;
+        }
 
-                    return [word, node];
-                }
+        const val = prop.valueAt(position, uri);
+        if (val instanceof dts.PHandle) {
+            return file.ctx.node(val.val);
+        }
+
+        if (val instanceof dts.ArrayValue) {
+            const cell = val.cellAt(position, uri);
+            if (cell instanceof dts.PHandle) {
+                return file.ctx.node(cell.val);
             }
         }
     }
@@ -834,20 +825,74 @@ class DTSEngine implements
             return;
         }
 
-        let [, node] = this.getNodeDefinition(file.ctx, document, position) ?? [undefined, undefined];
-        if (!node) {
-            const entry = file.getEntryAt(position, document.uri);
-            if (entry?.nameLoc.range.contains(position)) {
-                node = entry.node;
+        const entity = this.getEntityDefinition(file, document.uri, position);
+        if (entity instanceof dts.Node) {
+            const typeFile = entity?.type?.filename;
+            if (typeFile) {
+                return new vscode.Location(vscode.Uri.file(typeFile), new vscode.Range(0, 0, 0, 0));
             }
-        }
-
-        if (node?.type?.filename) {
-            return new vscode.Location(vscode.Uri.file(node.type.filename), new vscode.Range(0, 0, 0, 0));
         }
     }
 
-    provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Hover> {
+    async provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Hover> {
+        const hoverNode = (node: dts.Node, includeDefinition=true) => {
+            const entries = [new vscode.MarkdownString('`' + node.path + '`')];
+
+            if (node.type?.valid) {
+                entries.push(new vscode.MarkdownString().appendText(node.type.description));
+            }
+
+            if (includeDefinition) {
+                entries.push(new vscode.MarkdownString().appendCodeblock(node.toString(), 'dts'));
+            }
+
+            return new vscode.Hover(entries);
+        };
+
+        const hoverProp = (prop: dts.Property) => {
+            const propType = prop.node.type?.property(prop.name);
+            if (propType) {
+                const results: vscode.MarkdownString[] = [];
+                if (propType.description) {
+                    results.push(new vscode.MarkdownString(propType.description));
+                }
+                results.push(new vscode.MarkdownString('type: `' + (Array.isArray(propType.type) ? propType.type.join('`, `') : propType.type) + '`'));
+
+                if (propType.name.endsWith('-map') && propType.name !== 'interrupt-map') {
+                    const nexusMap = prop.nexusMap;
+                    if (nexusMap) {
+                        const identifier = propType.name.slice(0, propType.name.length - 4);
+                        const nexusText = new vscode.MarkdownString(`Nexus map for \`${identifier}s\` properties.\n\n`);
+                        nexusText.appendMarkdown(`Nexus nodes' \`-map\` properties are translation tables from one domain to another.\n\n`);
+                        nexusText.appendMarkdown(`Each entry in the nexus map defines one translation from \`${identifier}\` references to this node to the mapped node.`);
+                        if (nexusMap.length) {
+                            nexusText.appendMarkdown(`\n\nFor instance, because of the first entry in this map,`);
+                            nexusText.appendCodeblock(`${identifier}s = < ${prop.node.refName} ${nexusMap[0].in.map(i => i.toString(true)).join(' ')} >;`, 'dts');
+                            nexusText.appendMarkdown(`is equivalent to`);
+                            nexusText.appendCodeblock(`${identifier}s = < ${nexusMap[0].target.toString(true)} ${nexusMap[0].out.map(i => i.toString(true)).join(' ')} >;`, 'dts');
+                        }
+                        results.push(nexusText);
+                    }
+                }
+                return new vscode.Hover(results);
+            }
+        };
+
+        if (this.compiledDocProvider.is(document.uri) &&
+            document.getWordRangeAtPosition(position)) {
+
+            const entity = await this.compiledDocProvider.getEntity(position);
+            if (entity instanceof dts.Node) {
+                return hoverNode(entity, false);
+            }
+
+            if (entity instanceof dts.Property) {
+                return hoverProp(entity);
+            }
+
+            return;
+        }
+
         const file = this.parser.file(document.uri);
         if (!file) {
             return;
@@ -870,111 +915,59 @@ class DTSEngine implements
             }
         }
 
-        // hover reference
-        const bundle = this.getNodeDefinition(file.ctx, document, position);
-        if (bundle) {
-            const node = bundle[1];
-
-            const entries = [new vscode.MarkdownString('`' + node.path + '`')];
-
-            if (node.type.valid) {
-                entries.push(new vscode.MarkdownString().appendText(node.type.description));
-            }
-
-            entries.push(new vscode.MarkdownString().appendCodeblock(node.toString(), 'dts'));
-
-            return new vscode.Hover(entries, bundle[0]);
-        }
-
-        // hover property name
-        const word = document.getWordRangeAtPosition(position);
-        if (!word) {
-            return;
-        }
-
-        const symbol = document.getText(word);
         const entry = file.getEntryAt(position, document.uri);
         if (!entry) {
             return;
         }
 
-        const node = entry.node;
-        const type = node.type ?? this.types.baseType;
+        if (entry.nameLoc.uri.toString() === document.uri.toString() && entry.nameLoc.range.contains(position)) {
+            return hoverNode(entry.node);
+        }
+
         const prop = entry.properties.find(p => p.fullLoc.uri.toString() === document.uri.toString() && p.fullLoc.range.contains(position));
-        const value = prop?.valueAt(position, document.uri);
-        if (value) {
-            if (value instanceof dts.ArrayValue) {
-                const cell = value.cellAt(position, document.uri);
-                if (cell && file.ctx) {
-                    const names = prop.cellNames(file.ctx);
-                    const entry = names?.[prop.value.indexOf(value) % (names?.length || 1)];
-                    const name = entry?.[value.val.indexOf(cell) % (entry?.length || 1)] as string;
-                    if (name) {
-                        return new vscode.Hover(name, cell.loc.range);
-                    }
+        if (!prop) {
+            return;
+        }
+
+        const value = prop.valueAt(position, document.uri);
+        if (value instanceof dts.ArrayValue) {
+            const cell = value.cellAt(position, document.uri);
+            if (cell instanceof dts.PHandle) {
+                const ref = file.ctx.node(cell.val);
+                return ref && hoverNode(ref);
+            }
+
+            // Hover cell name for non-phandle cells:
+            if (cell && file.ctx) {
+                const names = prop.cellNames(file.ctx);
+                const entry = names?.[prop.value.indexOf(value) % (names?.length || 1)];
+                const name = entry?.[value.val.indexOf(cell) % (entry?.length || 1)] as string;
+                if (name) {
+                    return new vscode.Hover(name, cell.loc.range);
                 }
             }
         }
 
-        const propType = type.property(symbol);
-        if (propType) {
-            const results: vscode.MarkdownString[] = [];
-            if (propType.description) {
-                results.push(new vscode.MarkdownString(propType.description));
-            }
-            results.push(new vscode.MarkdownString('type: `' + (Array.isArray(propType.type) ? propType.type.join('`, `') : propType.type) + '`'));
-
-            if (propType.name.endsWith('-map') && propType.name !== 'interrupt-map') {
-                const p = file.getPropertyAt(position, document.uri);
-                const nexusMap = p?.nexusMap;
-                if (nexusMap) {
-                    const identifier = propType.name.slice(0, propType.name.length - 4);
-                    const nexusText = new vscode.MarkdownString(`Nexus map for \`${identifier}s\` properties.\n\n`);
-                    nexusText.appendMarkdown(`Nexus nodes' \`-map\` properties are translation tables from one domain to another.\n\n`);
-                    nexusText.appendMarkdown(`Each entry in the nexus map defines one translation from \`${identifier}\` references to this node to the mapped node.`);
-                    if (nexusMap.length) {
-                        nexusText.appendMarkdown(`\n\nFor instance, because of the first entry in this map,`);
-                        nexusText.appendCodeblock(`${identifier}s = < ${p.node.refName} ${nexusMap[0].in.map(i => i.toString(true)).join(' ')} >;`, 'dts');
-                        nexusText.appendMarkdown(`is equivalent to`);
-                        nexusText.appendCodeblock(`${identifier}s = < ${nexusMap[0].target.toString(true)} ${nexusMap[0].out.map(i => i.toString(true)).join(' ')} >;`, 'dts');
-                    }
-                    results.push(nexusText);
-                }
-            }
-            return new vscode.Hover(results, word);
+        if (value instanceof dts.PHandle) {
+            const ref = file.ctx.node(value.val);
+            return ref && hoverNode(ref);
         }
 
-        if (entry.nameLoc.range.contains(position)) {
-            const results: vscode.MarkdownString[] = [];
-            if (type.description) {
-                results.push(new vscode.MarkdownString(type.description));
-            } else if (type.compatible) {
-                results.push(new vscode.MarkdownString(type.compatible));
-            }
-
-            results.push(new vscode.MarkdownString('`' + node.path + '`'));
-
-            // Show pin assignments:
-            if (node.pins?.length && node.type.cells('gpio')?.length > 0) {
-                const pins = new vscode.MarkdownString('Pin assigments:\n\n');
-                pins.appendMarkdown('| Pin | Node | Property |\n');
-                pins.appendMarkdown('|-----|------|----------|\n');
-                pins.appendMarkdown(node.pins.map((pin, i) => {
-                    if (!pin) {
-                        return `| ${i} | NC | - |\n`;
-                    }
-
-                    return `| ${i} | \`${pin.prop.node.uniqueName}\` | ${pin.prop.name} |\n`;
-                }).join(''));
-                results.push(pins);
-            }
-            results.push(new vscode.MarkdownString().appendCodeblock(node.toString(), 'dts'));
-
-            return new vscode.Hover(results, word);
-        }
+        return hoverProp(prop);
     }
 
     provideDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Definition> {
+        if (this.compiledDocProvider.is(document.uri) &&
+            document.getWordRangeAtPosition(position)) {
+            return this.compiledDocProvider.getEntity(position).then(entity => {
+                if (entity instanceof dts.Node) {
+                    return entity.entries[0]?.nameLoc;
+                }
+
+                return entity?.loc;
+            });
+        }
+
         const file = this.parser.file(document.uri);
         if (!file) {
             return;
@@ -997,23 +990,13 @@ class DTSEngine implements
             }
         }
 
-        const bundle = this.getNodeDefinition(file.ctx, document, position);
-        if (bundle) {
-            return bundle[1].entries
-                .filter(e => !e.loc.range.contains(position))
+        const node = this.getEntityDefinition(file, document.uri, position);
+        if (node instanceof dts.Node) {
+            return node.entries
                 .map(e => new vscode.Location(e.loc.uri, e.loc.range));
         }
 
-        const entry = file.getEntryAt(position, document.uri);
-        if (!entry) {
-            return;
-        }
-
-        if (entry.nameLoc.uri.toString() === document.uri.toString() && entry.nameLoc.range.contains(position)) {
-            return entry.node.entries.map(e => e.nameLoc);
-        }
-
-        const prop = entry.getPropertyAt(position, document.uri);
+        const prop = file.getPropertyAt(position, document.uri);
         if (prop) {
             if (prop.loc.range.contains(position) && prop.loc.uri.toString() === document.uri.toString()) {
                 return prop.node.uniqueProperties().find(p => p.name === prop.name)?.loc;
@@ -1021,16 +1004,9 @@ class DTSEngine implements
 
             const type = prop.valueAt(position, document.uri);
             if (prop.name === 'compatible' && type instanceof dts.StringValue) {
-                const filename = this.types.get(type.val)?.[0]?.filename;
+                const filename = prop.node.type?.filename;
                 if (filename) {
                     return new vscode.Location(vscode.Uri.file(filename), new vscode.Position(0, 0));
-                }
-            }
-
-            if (type instanceof dts.ArrayValue) {
-                const cell = type.cellAt(position, document.uri);
-                if (cell instanceof dts.PHandle) {
-                    return file.ctx.node(cell.val)?.entries[0]?.nameLoc;
                 }
             }
         }

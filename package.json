@@ -85,13 +85,13 @@
             {
                 "command": "devicetree.getMacro",
                 "title": "DeviceTree: Copy C identifier",
-                "enablement": "editorLangId == dts && resourceScheme == file",
+                "enablement": "editorLangId == dts",
                 "icon": "$(clippy)"
             },
             {
                 "command": "devicetree.edit",
                 "title": "DeviceTree: Edit in overlay",
-                "enablement": "editorLangId == dts && resourceScheme == file && devicetree:ctx.hasOverlay",
+                "enablement": "editorLangId == dts && devicetree:ctx.hasOverlay",
                 "icon": "$(edit)"
             }
         ],

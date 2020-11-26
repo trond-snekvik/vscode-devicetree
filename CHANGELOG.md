@@ -1,4 +1,65 @@
-# Context explorer overview tree
+# v2.2.0 DeviceTree in other languages
+
+This release introduces DeviceTree aware language support in C and YAML bindings files, to improve the overall DeviceTree user experience. It also includes improvements to the Context explorer overview tree and some major improvements to the interpretation of some DeviceTree syntax corner cases.
+
+### C and YAML language support
+
+The DeviceTree extension now includes a schema for YAML bindings files that works as input to the RedHat YAML extension. It provides auto completion for field names, validates the values of each field and shows basic hover information for the various fields in the bindings files.
+
+Rudimentary C file support introduces DeviceTree aware completion for the various node and property ID macros, such as `DT_NODELABEL()`. The completion items are always based on the most recently viewed DeviceTree context, so if you switch between different overlay files a lot, make sure you pay attention to the suggestion documentation, which will show which context provided the value.
+
+### Preprocessor rewrite
+
+The preprocessor macro expansion mechanism has been rewritten to fix invalid behavior for macro argument concatenation. This also improves the overall performance, as tokens are only parsed once and looked up in a hashmap of defines, as opposed to the old regex generation.
+
+This rewrite fixes all known issues with complex pinmux macros and other concatenation based macro expressions. It also fixes printing of macros which span over multiple values or includes whole nodes. While these macros would occasionally generate invalid syntax in the preview file before, they should now be printed with their expanded values whenever they hide multiple phandle cells or property values.
+
+### Overview tree improvements
+
+The Context explorer overview tree has been enhanced with new colorful icons. This release adds ADC, DAC, Board and Clock sections, and now lists important bus properties, such as clock speed and flow control. Additionally, the GPIO pins view now fetches pins from nexus node maps as well as STM and Atmel pinmux configuration entries. A range of minor improvements have also been made to the overview tree:
+- Account for nodes with multiple interrupts
+- Show SPI chip select
+- Support partition-less flash instances
+- List every ADC channel for ADC users
+- Show type name in tooltip
+
+### Other noteworthy changes:
+
+New lint checks:
+- Check Flash node fixed partitions range
+- Check whether nexus entries have matches
+- Treat phandle as an acceptable phandles
+
+Improvements to the DeviceTree parser:
+- Accept C `UL` integer suffixes
+- Recognize raw * and / in property values as an unbraced expression and generate a warning
+- Single character arithmetic support in expressions
+
+Bug fixes:
+- GPIO pins:
+  - If a property referencing a GPIO pin was overwritten, both the existing and the overwritten value would show up in the GPIO overview. This has been fixed.
+  - Pin assignments from the board file would linger in the overview if the overlay file changed after the initial parse run.
+- Lint: Value names array length should match the number of top level entries in the matching property.
+- Preprocessor: Accept any filename character in includes, except spaces
+- Fix glitchy behavior for invalid interrupt and flash partition values in the overview tree
+- Correct all type cells lookup usage for signature, lint and hover
+
+General improvements:
+- The compiled output view supports all read-only language features
+- Completion: Fix ampersand expansion for references
+- Hover: Split long macros over multiple lines
+- Show macro replacement for single integer values, not just expressions
+- NewApp command: Default to folder containing open file
+- Context names: Omit folder name for root level contexts
+- Override status enum, so snippet doesn't expand to deprecated "ok" value
+- Show nodelabels in compiled output
+- Show entry names in signature completion
+- Show line about required properties in completion items
+- Edit in overlay command: Only show when the context has an overlay file
+- Copy C identifier command: Return phandle macro for node references, not the node being pointed to.
+- Permit commands from non-file schema resources, to accomodate remote development.
+
+# v2.1.0 Context explorer overview tree
 
 Adds overview tree to the context explorer, providing a summary of gpio ports, interrupts, flash partitions and buses.
 
@@ -25,7 +86,7 @@ Additional changes:
   - Allow preprocessor entries in node contents
   - Treat path separators as part of cursor word
 
-# Multiple file support
+# v2.0.0 Multiple file support
 
 This is a major rewrite of the Devicetree extension.
 The primary change is the new support for the C preprocessor, which enables support for multiple files and contexts.
@@ -40,7 +101,7 @@ Highlights:
 - Integration with West
 - Full bindings support
 
-# Minor Enhancements
+# v1.1.1 Minor Enhancements
 
 - Allow CPU child nodes
 - Search for bindings in zephyr and nrf subdirectories
@@ -52,7 +113,7 @@ Highlights:
 - Lint checks for addresses, ranges and status
 - Support binary operations in expressions
 
-# Update for Zephyr 2.2
+# v1.1.0 Update for Zephyr 2.2
 
 - Allows phandles without enclosing <> brackets.
 - Default include is *.dts, not *.dts_compiled

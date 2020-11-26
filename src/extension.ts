@@ -527,12 +527,12 @@ class DTSEngine implements
 
                 const alias = ctx.node('/alias/')?.properties().find(p => p.pHandle?.is(node));
                 if (alias) {
-                    return `DT_ALIAS(${toCIdentifier(alias.pHandle.val)})`
+                    return `DT_ALIAS(${toCIdentifier(alias.pHandle.val)})`;
                 }
 
                 const chosen = ctx.node('/chosen/')?.properties().find(p => p.pHandle?.is(node));
                 if (chosen) {
-                    return `DT_CHOSEN(${toCIdentifier(alias.pHandle.val)})`
+                    return `DT_CHOSEN(${toCIdentifier(alias.pHandle.val)})`;
                 }
 
                 if (node.parent) {

@@ -370,7 +370,7 @@ export class DTSTreeView implements
 
     private interruptOverview(ctx: DTSCtx) {
         const nodes = ctx.nodeArray();
-        let interrupts = new TreeInfoItem(ctx, 'Interrupts', 'interrupts');
+        const interrupts = new TreeInfoItem(ctx, 'Interrupts', 'interrupts');
         const controllers = nodes.filter(n => n.property('interrupt-controller'));
         const controllerItems = controllers.map(n => ({ item: new TreeInfoItem(ctx, n.uniqueName), children: new Array<{ node: Node, interrupts: Property }>() }));
         nodes.filter(n => n.property('interrupts')).forEach(n => {

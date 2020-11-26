@@ -184,6 +184,12 @@ class CSupport implements vscode.CompletionItemProvider {
                 item.documentation = suggestion.prop.node.type?.property(suggestion.prop.name)?.description;
             }
 
+            if (item.documentation) {
+                item.documentation += '\n\n';
+            }
+
+            item.documentation += `*From "${ctx.name}"*`;
+
             return item;
         });
     }

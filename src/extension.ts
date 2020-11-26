@@ -517,7 +517,7 @@ class DTSEngine implements
             });
         });
 
-        vscode.commands.registerCommand('devicetree.getMacro', () => {
+        vscode.commands.registerCommand('devicetree.getMacro', async () => {
             const ctx = this.parser.currCtx;
             const selection = vscode.window.activeTextEditor?.selection;
             const uri = vscode.window.activeTextEditor?.document.uri;
@@ -618,7 +618,7 @@ class DTSEngine implements
 
             let macro: string;
             if (this.compiledDocProvider.is(uri)) {
-                const entity = this.compiledDocProvider.getEntity(selection.start);
+                const entity = await this.compiledDocProvider.getEntity(selection.start);
                 if (entity instanceof dts.Node) {
                     macro = nodeMacro(entity);
                 } else if (entity instanceof dts.Property) {
@@ -661,7 +661,7 @@ class DTSEngine implements
                 return; // already in this file
             }
 
-            const editNode = (node: dts.Node, insertText='') => {
+            const editNode = async (node: dts.Node, insertText='') => {
                 const edit = new vscode.WorkspaceEdit();
 
                 let text = insertText;
@@ -685,12 +685,23 @@ class DTSEngine implements
                 edit.insert(doc.uri, insert, '\n' + text + '\n');
 
                 vscode.workspace.applyEdit(edit);
-                vscode.window.showTextDocument(doc).then(e => {
+                const e = vscode.window.visibleTextEditors.find(e => e.document?.uri.toString() === doc.uri.toString()) ?? await vscode.window.showTextDocument(doc);
+                if (e) {
                     e.revealRange(new vscode.Range(insert, insert), vscode.TextEditorRevealType.Default);
                     const cursor = new vscode.Position(insert.line + lineOffset, charOffset);
                     e.selection = new vscode.Selection(cursor, cursor);
-                });
+                }
             };
+
+            if (this.compiledDocProvider.is(uri)) {
+                const entity = await this.compiledDocProvider.getEntity(selection.start);
+                if (entity instanceof dts.Node) {
+                    editNode(entity);
+                } else if (entity instanceof dts.Property) {
+                    editNode(entity.node, entity.name + ' = ');
+                }
+                return;
+            }
 
             const prop = ctx.getPropertyAt(selection.start, uri);
             if (prop) {

@@ -135,12 +135,12 @@
             "editor/context": [
                 {
                     "command": "devicetree.getMacro",
-                    "when": "editorLangId == dts && !editorReadonly",
+                    "when": "editorLangId == dts",
                     "group": "9_cutcopypaste"
                 },
                 {
                     "command": "devicetree.edit",
-                    "when": "editorLangId == dts && !editorReadonly",
+                    "when": "editorLangId == dts",
                     "group": "1_modification"
                 }
             ],

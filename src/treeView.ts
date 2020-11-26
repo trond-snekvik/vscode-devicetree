@@ -230,6 +230,14 @@ export class DTSTreeView implements
             supported: 'Supported features',
             toolchain: 'Supported toolchains',
         }).forEach(([field, name]) => {
+            if (field === 'name') {
+                const model = ctx.root?.property('model')?.string;
+                if (model) {
+                    board.addChild(new TreeInfoItem(ctx, name, undefined, model));
+                    return;
+                }
+            }
+
             if (ctx.board.info[field]) {
                 const item = new TreeInfoItem(ctx, name, undefined);
                 if (Array.isArray(ctx.board.info[field])) {

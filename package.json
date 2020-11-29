@@ -226,6 +226,10 @@
                     "devicetree.ctxFile": {
                         "type": "string",
                         "description": "File to store contexts in"
+                    },
+                    "devicetree.defaultBoard": {
+                        "type": "string",
+                        "description": "Default DeviceTree board when overlay file has a generic name"
                     }
                 }
             }

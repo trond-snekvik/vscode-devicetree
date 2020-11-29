@@ -91,14 +91,13 @@ export async function isBoardFile(uri: vscode.Uri) {
 }
 
 export async function defaultBoard(): Promise<Board> {
-	const dtsBoard = conf.get('devicetree.board') as string;
+	const dtsBoard = conf.get('devicetree.defaultBoard') as string;
 	if (dtsBoard) {
-		const path = await findBoard(dtsBoard);
+		const path = findBoard(dtsBoard);
 		if (path) {
-			console.log('Using configured board');
+			console.log('Using default board');
 			return path;
 		}
-
 	}
 
 	const kconfigBoard = conf.get('kconfig.zephyr.board') as { board: string, arch: string, dir: string };

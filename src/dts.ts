@@ -1475,15 +1475,10 @@ export class Parser {
 
         board = await zephyr.defaultBoard();
         if (board) {
-            const options = ['Configure default', 'Select a different board'];
+            const options = ['Change default board'];
             vscode.window.showInformationMessage(`Using ${board.name} as a default board.`, ...options).then(async e => {
                 if (e === options[0]) {
-                    zephyr.openConfig('devicetree.board');
-                } else if (e === options[1]) {
-                    board = await zephyr.selectBoard();
-                    if (board) {
-                        // TODO: Reload context
-                    }
+                    zephyr.openConfig('devicetree.defaultBoard');
                 }
             });
             return board;

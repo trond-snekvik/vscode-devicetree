@@ -887,6 +887,10 @@ export class NodeEntry {
         this.number = number;
     }
 
+    get root() {
+        return this.parent?.root ?? this;
+    }
+
     get depth(): number {
         if (!this.parent) {
             return 0;
@@ -899,25 +903,25 @@ export class NodeEntry {
         return this.properties.find(p => p.fullRange.contains(pos) && p.loc.uri.toString() === uri.toString());
     }
 
-    toString(indent?: string) {
-        let result = indent;
-        if (this.ref) {
-            result += this.ref;
-        } else {
-            result += this.node.fullName;
-        }
-        result += ' {\n';
-        indent += '\t';
+    contentString(indent = '') {
+        let result = '{';
+        const innerIndent = indent + '\t';
 
-        result += this.properties.map(p => indent + p.toString(indent.length) + ';\n').join('');
-
-        if (this.properties.length && this.children.length) {
-            result += '\n';
+        const props = this.properties.map(p => innerIndent + p.toString(innerIndent.length) + ';\n').join('');
+        if (props) {
+            result += '\n' + props;
         }
 
-        result += this.children.map(c => c.toString(indent) + ';\n').join('\n');
+        const children = this.children.map(c => c.toString(innerIndent) + ';\n').join('');
+        if (children) {
+            result += '\n' + children;
+        }
 
-        return result + indent.slice(4) + '}';
+        return result + indent + '}';
+    }
+
+    toString(indent = '') {
+        return `${indent}${this.ref ?? this.node.fullName} ${this.contentString(indent)}`;
     }
 }
 

@@ -658,6 +658,22 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
         }
     });
 
+    // Suggest converting nested entries into single reference entry:
+    if (ctx.ctx.overlays.includes(entry.file) && !entry.labels.length && entry.parent && entry.node.labels().length) {
+        const isSingleNodeTree = (entry: NodeEntry) => {
+            return !entry.parent || (!entry.parent.properties.length && entry.parent.children.length === 1 && isSingleNodeTree(entry.parent))
+        };
+
+        if (isSingleNodeTree(entry)) {
+            const root = entry.root;
+            ctx.diags.pushLoc(entry.nameLoc, `Entry can be converted to single reference`, vscode.DiagnosticSeverity.Hint);
+            const refactor = new vscode.CodeAction('Convert to reference', vscode.CodeActionKind.Refactor);
+            refactor.edit = new vscode.WorkspaceEdit();
+            refactor.edit.replace(root.loc.uri, root.loc.range, `&${entry.node.labels()[0]} ${entry.contentString()}`);
+            ctx.diags.pushAction(refactor)
+        }
+    }
+
     if (entry.properties.length === 0 && entry.children.length === 0) {
         const diag = ctx.diags.pushLoc(entry.nameLoc, 'Empty node', vscode.DiagnosticSeverity.Hint);
         diag.tags = [vscode.DiagnosticTag.Unnecessary];

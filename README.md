@@ -46,6 +46,7 @@ This extension is an independent community contribution, and is not part of the 
   - Duplicate labels
   - Nexus node map entry exists
   - Flash partitions fit inside their area
+  - Suggest converting nested node to reference
 - DeviceTree overview
   - GPIO assignments
   - Flash partitions

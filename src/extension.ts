@@ -291,7 +291,7 @@ class DTSEngine implements
             return [];
         }
 
-        return this.diagSet.getActions(document.uri, range).filter(action => !context.only || context.only === action.kind);
+        return this.diagSet.getActions(document.uri, range).filter(action => !context.only || context.only.contains(action.kind));
     }
 
     async loadCtxs() {

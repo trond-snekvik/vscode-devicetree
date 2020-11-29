@@ -25,7 +25,7 @@ function west(...args: string[]): Promise<string> {
 	const command = westExe + ' ' + args.join(' ');
 
 	const options: ExecOptions = {
-		cwd: zephyrRoot ?? vscode.workspace.workspaceFolders?.find(w => w.name.match(/zephyr/i))?.uri.fsPath ?? vscode.workspace.workspaceFolders?.[0].uri.fsPath,
+		cwd: zephyrRoot ?? vscode.workspace.workspaceFolders?.find(w => w.name.match(/zephyr/i))?.uri.fsPath ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
 	};
 
 	return new Promise<string>((resolve, reject) => {

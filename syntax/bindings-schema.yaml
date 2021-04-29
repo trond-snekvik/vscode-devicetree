@@ -44,6 +44,7 @@ patternProperties:
       The <1 2> part of the property value is called a *specifier* (this terminology is from the devicetree specification), and contains additional data associated with the GPIO. Here, the specifier has two cells, and the node pointed at by &gpio-ctrl is expected to have '#pwm-cells = <2>'.
 
       *-cells gives a name to each cell in the specifier. These names are used when generating identifiers.
+additionalProperties: false
 
 definitions:
   include:

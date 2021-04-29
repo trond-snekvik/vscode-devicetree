@@ -470,11 +470,11 @@ const standardTypes = [
 export class TypeLoader {
     types: {[name: string]: NodeType[]};
     folders: string[] = []
-    diags: DiagnosticsSet;
+    diags: vscode.DiagnosticCollection;
     baseType: NodeType;
 
     constructor() {
-        this.diags = new DiagnosticsSet();
+        this.diags = vscode.languages.createDiagnosticCollection('DeviceTree types');
         this.baseType = new AbstractNodeType({ name: '<unknown>', properties: { ...standardProperties } });
         this.types = {};
         standardTypes.forEach(type => this.addType(type));
@@ -499,8 +499,25 @@ export class TypeLoader {
                 if (err) {
                     console.log(`Couldn't open ${file}`);
                 } else {
-                    const tree = yaml.load(out, { json: true });
-                    this.addType(new NodeType({ name: path.basename(file, '.yaml'), ...tree }, filePath));
+                    try {
+                        const tree = yaml.load(out, { json: true });
+                        this.addType(new NodeType({ name: path.basename(file, '.yaml'), ...tree }, filePath));
+                    } catch (e) {
+                        const pos =
+                            "mark" in e
+                                ? new vscode.Position(
+                                      e.mark.line - 1,
+                                      e.mark.column
+                                  )
+                                : new vscode.Position(0, 0);
+                        this.diags.set(vscode.Uri.file(filePath), [
+                            new vscode.Diagnostic(
+                                new vscode.Range(pos, pos),
+                                `Invalid type definition: ${e.message ?? e}`,
+                                vscode.DiagnosticSeverity.Error
+                            ),
+                        ]);
+                    }
                 }
 
                 resolve();
@@ -546,7 +563,6 @@ export class TypeLoader {
                 return [node.parent.type.child];
             }
 
-            node.entries.forEach(e => this.diags.push(e.nameLoc.uri, new vscode.Diagnostic(e.nameLoc.range, `Unknown type. Missing "compatible" property`)));
             return [];
         };
 

@@ -119,7 +119,7 @@ function boardRoots(): string[] {
 
 async function findBoards() {
 	boards = new Array<Board>();
-	return Promise.all(boardRoots().map(root => new Promise(resolve => glob(`**/*.dts`, { cwd: root }, (err, matches) => {
+	return Promise.all(boardRoots().map(root => new Promise<void>(resolve => glob(`**/*.dts`, { cwd: root }, (err, matches) => {
 		if (!err) {
 			matches.forEach(m => boards.push({name: path.basename(m, '.dts'), path: `${root}/${m}`, arch: m.split(/[/\\]/)?.[0]}));
 		}
@@ -145,7 +145,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		return;
 	}
 
-	return new Promise(resolve => {
+	return new Promise<void>(resolve => {
 		ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async e => {
 			if (e.affectsConfiguration('kconfig.zephyr.base') || e.affectsConfiguration('kconfig.zephyr.west') ||
 				e.affectsConfiguration('devicetree.zephyr') || e.affectsConfiguration('devicetree.west')) {

@@ -419,7 +419,7 @@ export class TypeLoader {
     async addFolder(folder: string) {
         this.folders.push(folder);
         const g = glob.sync('**/*.yaml', { cwd: folder, ignore: 'test/*' });
-        return Promise.all(g.map(file => new Promise(resolve => {
+        return Promise.all(g.map(file => new Promise<void>(resolve => {
             const filePath = path.resolve(folder, file);
             readFile(filePath, 'utf-8', (err, out) => {
                 if (err) {

@@ -23,20 +23,49 @@ export interface PropertyType {
     isLoaded?: boolean;
 }
 
+type PropertyTypeMap = { [name: string]: PropertyType };
+
+interface PropertyFilter {
+    allow?: string[];
+    block?: string[];
+}
+
+interface TypeInclude extends PropertyFilter {
+    name: string;
+    allow?: string[];
+    block?: string[];
+    childBinding?: boolean;
+}
+
+function filterProperties(props: PropertyTypeMap, filter: PropertyFilter): string[] {
+    if (!filter.allow && !filter.block) {
+        return Object.keys(props);
+    }
+
+    return Object.keys(props).filter(
+        (name) =>
+            (
+                (!filter.allow || filter.allow.includes(name)) &&
+                (!filter.block || !filter.block.includes(name))
+            )
+    );
+}
+
 export class NodeType {
-    private _properties: { [name: string]: PropertyType };
-    private _include: string[];
+    private _properties: PropertyTypeMap;
+    private _include: TypeInclude[];
     private _cells: {[cell: string]: string[]};
     private _bus: string;
     private _onBus: string;
+    private _isChild = false;
     readonly filename?: string;
     readonly compatible: string;
     readonly valid: boolean = true;
     readonly description?: string;
     readonly child?: NodeType;
-    loader?: TypeLoader;
+    private loader?: TypeLoader;
 
-    constructor(tree: any, filename?: string) {
+    constructor(private tree: any, filename?: string) {
         this._onBus = tree['on-bus'];
         this._bus = tree['bus'];
         this._cells = {};
@@ -47,15 +76,41 @@ export class NodeType {
         this.description = tree.description;
         this.filename = filename;
 
+        const childIncludes = new Array<{[key: string]: any}>();
+
+        // includes may either be an array of strings or an array of objects with "include"
+        const processInclude = (i: string | {[key: string]: any}): TypeInclude => {
+            if (typeof(i) === 'string') {
+                return {
+                    // remove .yaml file extension:
+                    name: i.split('.')[0],
+                };
+            }
+
+            const incl = {
+                // remove .yaml file extension:
+                name: i.name.split('.')[0],
+                block: i['property-blocklist'],
+                allow: i['property-allowlist'],
+            } as TypeInclude;
+
+            // Child binding includes are transferred to the child's tree:
+            childIncludes.push({
+                name: incl.name,
+                ...i['child-binding'],
+            });
+
+            return incl;
+        };
+
         if (Array.isArray(tree.include)) {
-            this._include = tree.include;
+            this._include = tree.include.map(processInclude);
         } else if (tree.include) {
-            this._include = [tree.include];
+            this._include = [processInclude(tree.include)];
         } else {
             this._include = [];
         }
 
-        this._include = this._include.map(i => i.split('.')?.[0]);
         this._properties = tree.properties ?? {};
 
         for (const name in this._properties) {
@@ -64,14 +119,23 @@ export class NodeType {
         }
 
         if ('child-binding' in tree) {
+            // Transfer the child binding property list to the child type, so it can
+            // handle it the same way parent types do:
+            tree['child-binding'].include = childIncludes;
             this.child = new NodeType(tree['child-binding']);
+            this.child._isChild = true;
         }
 
         return this;
     }
 
-    get inclusions(): NodeType[] {
-        return this._include.flatMap(i => this.loader?.get(i) ?? []);
+    setLoader(loader: TypeLoader) {
+        this.loader = loader;
+        this.child?.setLoader(loader);
+    }
+
+    private get inclusions(): NodeType[] {
+        return this._include.flatMap(i => this.loader?.get(i.name) ?? []);
     }
 
     includes(name: string) {
@@ -99,16 +163,28 @@ export class NodeType {
         return this._onBus ?? this.inclusions.find(i => i.onBus)?.onBus;
     }
 
-    private get propMap(): {[name: string]: PropertyType} {
+    private get propMap(): PropertyTypeMap {
         const props = { ...this._properties };
-        const add = (included) => {
-            for (const name in included) {
-                props[name] = { ...included[name], ...(props[name] ?? {}) };
-            }
-        };
 
-        this.inclusions.forEach(i => add(i.propMap));
-        add(standardProperties);
+        // import properties from included bindings:
+        this._include.forEach(spec => {
+            this.loader?.get(spec.name).forEach(type => {
+                if (this._isChild) {
+                    // If this is a child binding, we should be including bindings from the
+                    // child binding of the included type. Our parent transferred our include
+                    // spec to our tree before creating us.
+                    type = type.child;
+                    if (!type) {
+                        return;
+                    }
+                }
+
+                const filtered = filterProperties(type.propMap, spec);
+                for (const name of filtered) {
+                    props[name] = { ...type.propMap[name], ...(props[name] ?? {}) };
+                }
+            });
+        });
 
         return props;
     }
@@ -130,7 +206,7 @@ class AbstractNodeType extends NodeType {
     readonly valid: boolean = false;
 }
 
-const standardProperties: {[name: string]: PropertyType} = {
+const standardProperties: PropertyTypeMap = {
     '#address-cells': {
         name: '#address-cells',
         required: false,
@@ -413,7 +489,7 @@ export class TypeLoader {
             this.types[type.name] = [type];
         }
 
-        type.loader = this;
+        type.setLoader(this);
     }
 
     async addFolder(folder: string) {

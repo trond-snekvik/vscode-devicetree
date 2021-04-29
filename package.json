@@ -205,7 +205,7 @@
         ],
         "configuration": [
             {
-                "title": "devicetree",
+                "title": "DeviceTree",
                 "properties": {
                     "devicetree.bindings": {
                         "type": "array",
@@ -213,19 +213,23 @@
                         "default": [
                             "${zephyrBase}/dts/bindings",
                             "${zephyrBase}/../nrf/dts/bindings"
-                        ]
+                        ],
+                        "scope": "machine"
                     },
                     "devicetree.west": {
                         "type": "string",
-                        "description": "Path to the West executable"
+                        "description": "Path to the West executable",
+                        "scope": "machine"
                     },
                     "devicetree.zephyr": {
                         "type": "string",
-                        "description": "Path to the Zephyr repo"
+                        "description": "Path to the Zephyr repo",
+                        "scope": "machine"
                     },
                     "devicetree.ctxFile": {
                         "type": "string",
-                        "description": "File to store contexts in"
+                        "description": "File to store contexts in",
+                        "scope": "machine"
                     },
                     "devicetree.defaultBoard": {
                         "type": "string",

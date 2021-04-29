@@ -71,6 +71,7 @@ definitions:
         $ref: "#/definitions/child-binding"
       include:
         $ref: "#/definitions/include"
+    additionalProperties: false
   description:
     type: string
     description: Human readable description. The description shows up in documentation and type hover.

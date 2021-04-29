@@ -836,18 +836,39 @@ class DTSEngine implements
         }
     }
 
-    provideTypeDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Location | vscode.Location[] | vscode.LocationLink[]> {
+    async provideTypeDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Location> {
         const file = this.parser.file(document.uri);
         if (!file) {
             return;
         }
 
+        let typeFile: string | undefined;
+        let range = new vscode.Range(0, 0, 0, 0);
+
         const entity = this.getEntityDefinition(file, document.uri, position);
         if (entity instanceof dts.Node) {
-            const typeFile = entity?.type?.filename;
+            typeFile = entity?.type?.filename;
+        } else if (entity instanceof dts.Property) {
+            // fetch the node of the original property declaration if available:
+            typeFile = entity.node.type.property(entity.name)?.node?.filename ?? entity.node.type?.filename;
             if (typeFile) {
-                return new vscode.Location(vscode.Uri.file(typeFile), new vscode.Range(0, 0, 0, 0));
+                // Try a best effort search for the property name within the type file. If it fails, we'll
+                // fall back to just opening the file.
+                const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(typeFile));
+                if (!doc) {
+                    return;
+                }
+
+                // This is a pretty optimistic regex, but it removes most mentions from comments and descriptions:
+                const offset = doc.getText().match(new RegExp(`(${entity.name}|"${entity.name}")\\s*:`))?.index;
+                if (offset !== undefined) {
+                    range = doc.getWordRangeAtPosition(doc.positionAt(offset));
+                }
             }
+        }
+
+        if (typeFile) {
+            return new vscode.Location(vscode.Uri.file(typeFile), range);
         }
     }
 
@@ -1355,7 +1376,7 @@ class DTSEngine implements
 
         let typeProps = node.type?.properties ?? [];
         if (!document.getWordRangeAtPosition(position)) {
-            typeProps = typeProps.filter(p => (p.name !== '#size-cells') && (p.name !== '#address-cells') && p.isLoaded);
+            typeProps = typeProps.filter(p => (p.name !== '#size-cells') && (p.name !== '#address-cells') && p.node);
         }
 
         const propCompletions = typeProps

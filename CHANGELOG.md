@@ -1,3 +1,8 @@
+# v2.3.1 Accept standard properties
+
+Minor bugfix release to add standard properties in the list of accepted properties on a node type.
+Bumps Webpack to v5 to address security vulnerability in dev environment.
+
 # v2.3.0 New binding include syntax
 
 This release adds support for [the new binding include syntax](https://github.com/zephyrproject-rtos/zephyr/pull/29498), updates the icon and fixes several minor bugs.

@@ -1,3 +1,38 @@
+# v2.3.0 New binding include syntax
+
+This release adds support for [the new binding include syntax](https://github.com/zephyrproject-rtos/zephyr/pull/29498), updates the icon and fixes several minor bugs.
+
+### Binding include syntax
+
+The new binding include syntax broke the bindings loading system, which has been reworked, fixing several minor bugs in the process. Future changes to the binding format will now be caught during loading, and only leads to exclusion of the broken binding file, instead of aborting the entire binding loading.
+
+The bindings file YAML schema has been updated to support the new structure as well.
+
+### New icon
+
+The extension icon has been updated to follow the [new Zephyr documentation style](https://github.com/zephyrproject-rtos/zephyr/pull/33299), which updates the look of the quick start icons on the [Zephyr documentation homepage](https://docs.zephyrproject.org)
+
+### Other changes
+
+New code actions:
+- Convert unnecessarily nested node entries
+  - Nodes that only contain a single child node can now be collapsed into a child entry with a code action.
+- "Go to Type definition" for properties
+  - The Go to Type definition action now tries to find the type definition of properties, opening the bindings file that defines the property.
+
+Bindings:
+- Support for new include syntax
+- Warns about invalid entries on all levels
+
+Bug fixes:
+- Prevent West from crashing when running without a workspace folder
+- Fix bindings schema for enum values
+- Filter diagnostics correctly when VS Code requests specific types
+
+Other changes:
+- Set settings title to "DeviceTree"
+- Don't perform settings sync on path settings
+
 # v2.2.0 DeviceTree in other languages
 
 This release introduces DeviceTree aware language support in C and YAML bindings files, to improve the overall DeviceTree user experience. It also includes improvements to the Context explorer overview tree and some major improvements to the interpretation of some DeviceTree syntax corner cases.

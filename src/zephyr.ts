@@ -12,7 +12,7 @@ import * as glob from 'glob';
 import * as yaml from 'js-yaml';
 
 export type BoardInfo = { identifier: string, name: string, type: string, arch: string, toolchain: string[], ram: number, flash: number, supported: string[] };
-export type Board = { name: string, path: string, arch?: string, info?: BoardInfo | {} };
+export type Board = { name: string, path: string, arch?: string, info?: BoardInfo | {[name: string]: any} };
 const conf = vscode.workspace.getConfiguration();
 export let zephyrRoot: string;
 let westExe: string;

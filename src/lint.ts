@@ -602,7 +602,7 @@ function lintEntry(entry: NodeEntry, ctx: LintCtx) {
         }
 
         // Per-property type check:
-        const propType = node.type?.property(prop.name);
+        const propType = node.type?.property(prop.name) ?? ctx.types.baseType.property(prop.name);
 
         if (!propType) {
             if (node.type?.valid) {

@@ -111,8 +111,9 @@ definitions:
           enum:
             type: array
             items:
-              - string
-              - integer
+              type:
+                - string
+                - integer
             description: A property enum value restricts the possible values for the property.
           const:
             type:

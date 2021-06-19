@@ -15,6 +15,7 @@ import { existsSync, readFile, writeFile, writeFileSync } from 'fs';
 import { DTSTreeView } from './treeView';
 import { capitalize } from './util';
 import { DTSDocumentProvider } from './compiledOutput';
+import { API } from './api';
 
 const config = vscode.workspace.getConfiguration('devicetree');
 
@@ -1669,11 +1670,15 @@ class DTSEngine implements
     }
 }
 
-export async function activate(context: vscode.ExtensionContext) {
+export async function activate(
+    context: vscode.ExtensionContext
+): Promise<API> {
     await zephyr.activate(context);
 
     const engine = new DTSEngine();
-    engine.activate(context);
+    await engine.activate(context);
+
+    return new API(engine.parser, engine.treeView);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function

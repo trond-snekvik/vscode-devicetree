@@ -1176,8 +1176,8 @@ export class DTSCtx {
     dirty: vscode.Uri[];
     includes = new Array<string>();
     _name?: string;
-    id: string;
     saved=false;
+    external=false;
 
     constructor(public id: number=-1) {
         this.nodes = {};
@@ -1236,6 +1236,12 @@ export class DTSCtx {
     insertOverlay(uri: vscode.Uri) {
         this.overlays = [new DTSFile(uri, this), ...this.overlays];
         this.dirty.push(uri);
+    }
+
+    setOverlays(uris: vscode.Uri[]) {
+        this.overlays.forEach(overlay => overlay.remove());
+        this.overlays = uris.map(uri => new DTSFile(uri, this));
+        uris.forEach(uri => this.dirty.push(uri));
     }
 
     adoptNodes(file: DTSFile) {
@@ -1608,7 +1614,7 @@ export class Parser {
      * reparse the file (adding any new nodes and their entries). Doing this from the bottom of the
      * file list makes the context look the same as it did the first time when they're parsed.
      */
-    private async reparse(ctx: DTSCtx) {
+    async reparse(ctx: DTSCtx) {
         ctx.parsing = true;
         this.isStable = false;
         const removed = ctx.reset();

@@ -72,7 +72,7 @@ async function findZephyrRoot() {
 	}
 }
 
-export function findBoard(board: string): Board {
+export function findBoard(board: string): Board | undefined {
 	return boards.find(b => b.name === board);
 }
 

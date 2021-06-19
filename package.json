@@ -2,7 +2,7 @@
     "name": "devicetree",
     "displayName": "DeviceTree for the Zephyr Project",
     "description": "Full DeviceTree language support for the Zephyr project",
-    "version": "2.3.1",
+    "version": "2.4.0",
     "publisher": "trond-snekvik",
     "author": {
         "email": "trond.snekvik@gmail.com",

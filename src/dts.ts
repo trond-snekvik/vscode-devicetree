@@ -1179,7 +1179,7 @@ export class DTSCtx {
     id: string;
     saved=false;
 
-    constructor() {
+    constructor(public id: number=-1) {
         this.nodes = {};
         this.overlays = [];
         this.dirty = [];
@@ -1391,6 +1391,7 @@ export class Parser {
     private inDTS: boolean;
     private isStable = true;
     private waiters = new Array<() => void>();
+    private nextId=0;
 
     constructor(defines: {[name: string]: string}, includes: string[], types: TypeLoader) {
         this.includes = includes;
@@ -1425,12 +1426,16 @@ export class Parser {
         return file;
     }
 
-    ctx(uri: vscode.Uri): DTSCtx {
-        if (this.currCtx?.has(uri)) {
+    ctx(id: vscode.Uri | number): DTSCtx | undefined {
+        if (typeof(id) === 'number') {
+            return this.contexts.find(ctx => ctx.id === id);
+        }
+
+        if (this.currCtx?.has(id)) {
             return this.currCtx;
         }
 
-        return this.contexts.find(ctx => ctx.has(uri));
+        return this.contexts.find(ctx => ctx.has(id));
     }
 
     set currCtx(ctx: DTSCtx) {
@@ -1493,7 +1498,7 @@ export class Parser {
     }
 
     async addContext(board?: vscode.Uri | zephyr.Board, overlays=<vscode.Uri[]>[], name?: string): Promise<DTSCtx> {
-        const ctx = new DTSCtx();
+        const ctx = new DTSCtx(++this.nextId);
         let boardDoc: vscode.TextDocument;
         if (board instanceof vscode.Uri) {
             ctx.board = { name: path.basename(board.fsPath, path.extname(board.fsPath)), path: board.fsPath, arch: board.fsPath.match(/boards[/\\]([^./\\]+)/)?.[1] };

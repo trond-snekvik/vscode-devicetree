@@ -126,4 +126,12 @@ export interface DeviceTree {
      * @param id ID of the context.
      */
     getDetails(id: number): InfoItem | undefined;
+
+    /**
+     * Show a preview of the compiled DeviceTree output in a new editor.
+     *
+     * @param id ID of the context.
+     * @param options Optional preview options
+     */
+    preview(id: number, options?: vscode.TextDocumentShowOptions): void;
 }

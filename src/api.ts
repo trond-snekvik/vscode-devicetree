@@ -8,6 +8,7 @@ import * as dts from "./dts";
 import { DeviceTree, Context, InfoItem, File } from "../api";
 import { DTSTreeView, TreeInfoItem, iconPath } from "./treeView";
 import * as zephyr from "./zephyr";
+import { DTSDocumentProvider } from "./compiledOutput";
 
 function packFile(file: dts.DTSFile): File {
     const getIncludes = (uri: vscode.Uri): vscode.Uri[] => {
@@ -113,6 +114,13 @@ export class API implements DeviceTree {
         const ctx = this._parser.ctx(id);
         if (ctx) {
             return packInfoItem(this._treeView.details(ctx));
+        }
+    }
+
+    preview(id: number, options?: vscode.TextDocumentShowOptions) {
+        const ctx = this._parser.ctx(id);
+        if (ctx) {
+            DTSDocumentProvider.open(ctx, options);
         }
     }
 }

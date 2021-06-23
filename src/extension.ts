@@ -392,8 +392,6 @@ class DTSEngine implements
         ctx.subscriptions.push(disposable);
         disposable = vscode.languages.registerDocumentLinkProvider(realDTSFiles, this);
         ctx.subscriptions.push(disposable);
-        disposable = vscode.workspace.registerTextDocumentContentProvider('devicetree', this.compiledDocProvider);
-        ctx.subscriptions.push(disposable);
         disposable = vscode.languages.registerCodeActionsProvider(realDTSFiles, this);
         ctx.subscriptions.push(disposable);
         disposable = vscode.languages.registerReferenceProvider(allDTSFiles, this);
@@ -401,17 +399,7 @@ class DTSEngine implements
         disposable = vscode.languages.registerTypeDefinitionProvider(realDTSFiles, this);
         ctx.subscriptions.push(disposable);
 
-        vscode.commands.registerCommand('devicetree.showOutput', (uri: dts.DTSCtx | vscode.Uri) => {
-            if (uri instanceof dts.DTSCtx) {
-                uri = uri.files.pop()?.uri;
-            } else if (!uri && vscode.window.activeTextEditor?.document.languageId === 'dts') {
-                uri = vscode.window.activeTextEditor?.document.uri;
-            }
-
-            if (uri) {
-                vscode.window.showTextDocument(vscode.Uri.parse(`devicetree://${path.dirname(uri.path)}/Compiled DeviceTree output (${path.basename(uri.fsPath, path.extname(uri.fsPath))})?${uri.path}`), { viewColumn: vscode.ViewColumn.Beside });
-            }
-        });
+        this.compiledDocProvider.activate(ctx);
 
         vscode.commands.registerCommand('devicetree.newApp', async () => {
             const folder = await vscode.window.showOpenDialog({

@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 import * as dts from './dts';
+import * as path from 'path';
 
 type CompiledEntity = { start: number, end: number, entity?: dts.Node | dts.Property };
 
 export class DTSDocumentProvider implements vscode.TextDocumentContentProvider {
+    private static readonly COMMAND = 'devicetree.showOutput';
     private readonly INDENT = ' '.repeat(8);
     private parser: dts.Parser;
     private changeEmitter: vscode.EventEmitter<vscode.Uri>;
@@ -21,6 +23,33 @@ export class DTSDocumentProvider implements vscode.TextDocumentContentProvider {
                 this.changeEmitter.fire(this.currUri);
             }
         });
+    }
+
+    activate(ctx: vscode.ExtensionContext) {
+        ctx.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('devicetree', this));
+        ctx.subscriptions.push(
+            vscode.commands.registerCommand(DTSDocumentProvider.COMMAND, (uri?: dts.DTSCtx | vscode.Uri, options?: vscode.TextDocumentShowOptions) => {
+                if (uri instanceof dts.DTSCtx) {
+                    uri = uri.files.pop()?.uri;
+                } else if (!uri && vscode.window.activeTextEditor?.document.languageId === 'dts') {
+                    uri = vscode.window.activeTextEditor?.document.uri;
+                }
+
+                if (uri) {
+                    const base = path.basename(uri.fsPath, path.extname(uri.fsPath));
+                    vscode.window.showTextDocument(
+                        vscode.Uri.parse(
+                            `devicetree://${path.dirname(uri.path)}/Compiled DeviceTree output (${base})?${uri.path}`
+                        ),
+                        options ?? { viewColumn: vscode.ViewColumn.Beside }
+                    );
+                }
+            })
+        );
+    }
+
+    static open(ctx: dts.DTSCtx, options?: vscode.TextDocumentShowOptions) {
+        vscode.commands.executeCommand(DTSDocumentProvider.COMMAND, ctx, options);
     }
 
     private async getDoc() {

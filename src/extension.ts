@@ -6,50 +6,19 @@
 'use strict';
 import * as vscode from 'vscode';
 import * as dts from './dts';
-import * as types from './types';
+import { typeLoader, PropertyType, NodeType } from './types';
 import * as zephyr from './zephyr';
 import {lint, LintCtx} from './lint';
 import * as path from 'path';
 import { DiagnosticsSet } from './diags';
 import { existsSync, readFile, writeFile, writeFileSync } from 'fs';
-import { DTSTreeView } from './treeView';
+import { treeView } from './treeView';
 import { capitalize } from './util';
 import { DTSDocumentProvider } from './compiledOutput';
 import { API } from './api';
+import { config } from './config';
 
-const config = vscode.workspace.getConfiguration('devicetree');
-
-function getConfig(variable: string) {
-    const result = config.inspect(variable);
-    if (result) {
-        return result.workspaceFolderValue || result.workspaceValue || result.globalValue || result.defaultValue;
-    }
-    return undefined;
-}
-
-function getBindingDirs(): string[] {
-    const dirs = getConfig('bindings') as string[];
-    return dirs.map(d => {
-        return d.replace(/\${(.*?)}/g, (original, name: string) => {
-            if (name === 'workspaceFolder') {
-                return vscode.workspace.workspaceFolders?.[0].uri.fsPath ?? vscode.env.appRoot;
-            }
-
-            if (name.startsWith('workspaceFolder:')) {
-                const folder = name.split(':')[1];
-                return vscode.workspace.workspaceFolders.find(w => w.name === folder)?.uri.fsPath ?? original;
-            }
-
-            if (['zephyr_base', 'zephyrbase'].includes(name.toLowerCase())) {
-                return zephyr.zephyrRoot ?? original;
-            }
-
-            return original;
-        });
-    }).map(path.normalize);
-}
-
-function appendPropSnippet(p: types.PropertyType, snippet: vscode.SnippetString, node?: dts.Node) {
+function appendPropSnippet(p: PropertyType, snippet: vscode.SnippetString, node?: dts.Node) {
     switch (p.type) {
         case 'boolean':
             snippet.appendText(p.name);
@@ -128,18 +97,12 @@ function toCIdentifier(name: string) {
 }
 
 class CSupport implements vscode.CompletionItemProvider {
-    parser: dts.Parser;
-
-    constructor(parser: dts.Parser) {
-        this.parser = parser;
-    }
-
     activate(ctx: vscode.ExtensionContext) {
         ctx.subscriptions.push(vscode.languages.registerCompletionItemProvider({ language: 'c', scheme: 'file' }, this));
     }
 
     provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.CompletionContext): vscode.ProviderResult<vscode.CompletionItem[]> {
-        const ctx = this.parser.lastCtx;
+        const ctx = dts.parser.lastCtx;
         if (!ctx) {
             return;
         }
@@ -209,48 +172,47 @@ class DTSEngine implements
     vscode.DocumentLinkProvider,
     vscode.ReferenceProvider,
     vscode.TypeDefinitionProvider {
-    parser: dts.Parser;
     diags: vscode.DiagnosticCollection;
     diagSet?: DiagnosticsSet;
-    types: types.TypeLoader;
     prevDiagUris: vscode.Uri[] = [];
-    treeView: DTSTreeView;
     cSupport: CSupport;
     compiledDocProvider: DTSDocumentProvider;
+    lintTimer = {};
 
     constructor() {
         this.diags = vscode.languages.createDiagnosticCollection('DeviceTree');
-        this.types = new types.TypeLoader();
+        dts.parser.onChange(ctx => {
+            const diags = ctx.getDiags();
+            this.setDiags(diags);
+        });
 
-        const defines = (getConfig('deviceTree.defines') ?? {}) as {[name: string]: string};
-
-        this.parser = new dts.Parser(defines, [], this.types);
-        this.parser.onChange(ctx => {
+        dts.parser.onStable(ctx => {
             const lintCtx: LintCtx =  {
                 diags: new DiagnosticsSet(),
-                types: this.types,
+                types: typeLoader,
                 ctx,
                 gpioControllers: [],
                 labels: {},
             };
 
-            lint(lintCtx);
             const diags = ctx.getDiags();
+
+            lint(lintCtx);
+
             diags.merge(lintCtx.diags);
             this.setDiags(diags);
         });
 
-        this.parser.onOpen(() => {
+        dts.parser.onOpen(() => {
             this.saveCtxs();
         });
 
-        this.parser.onDelete(() => {
+        dts.parser.onDelete(() => {
             this.saveCtxs();
         });
 
-        this.treeView = new DTSTreeView(this.parser);
-        this.cSupport = new CSupport(this.parser);
-        this.compiledDocProvider = new DTSDocumentProvider(this.parser);
+        this.cSupport = new CSupport();
+        this.compiledDocProvider = new DTSDocumentProvider();
     }
 
     /** Returns all pHandle references to the node under cursor.  */
@@ -258,13 +220,13 @@ class DTSEngine implements
         if (this.compiledDocProvider.is(document.uri) && document.getWordRangeAtPosition(position)) {
             const node = await this.compiledDocProvider.getEntity(position);
             if (node instanceof dts.Node) {
-                return this.parser.ctx(vscode.Uri.file(this.compiledDocProvider.currUri.query))?.getReferences(node).map(r => r.loc);
+                return dts.parser.ctx(vscode.Uri.file(this.compiledDocProvider.currUri.query))?.getReferences(node).map(r => r.loc);
             }
 
             return;
         }
 
-        const ctx = this.parser.ctx(document.uri);
+        const ctx = dts.parser.ctx(document.uri);
         if (!ctx) {
             return;
         }
@@ -296,26 +258,26 @@ class DTSEngine implements
     }
 
     async loadCtxs() {
-        const file = config.get('ctxFile') as string;
+        const file = config.get('ctxFile');
         if (!file) {
             return;
         }
 
         const text = await new Promise<string>(resolve => readFile(file, 'utf-8', (_, data) => resolve(data))) ?? '';
         const json: StoredCtx[] = JSON.parse(text) || [];
-        const ctxNames = [...this.parser.contexts.map(ctx => ctx.name)];
+        const ctxNames = [...dts.parser.contexts.map(ctx => ctx.name)];
 
         await Promise.all(json.map(ctx => {
             if (!ctxNames.includes(ctx.name)) {
                 ctxNames.push(ctx.name); // don't load duplicates
-                return this.parser.addContext(ctx.board ?? vscode.Uri.file(ctx.boardFile), ctx.overlays.map(o => vscode.Uri.file(o)), ctx.name);
+                return dts.parser.addContext(ctx.board ?? vscode.Uri.file(ctx.boardFile), ctx.overlays.map(o => vscode.Uri.file(o)), ctx.name);
             }
         }));
     }
 
     async saveCtxs(createFile=false) {
-        await this.parser.stable();
-        const file = getConfig('ctxFile') as string;
+        await dts.parser.stable();
+        const file = config.get('ctxFile');
 
         vscode.commands.executeCommand('setContext', 'devicetree:dirtyConfig', true);
 
@@ -328,12 +290,12 @@ class DTSEngine implements
                 return;
             }
 
-            config.update('ctxFile', uri.fsPath, vscode.ConfigurationTarget.Workspace);
+            config.set('ctxFile', uri.fsPath);
         } else {
             return;
         }
 
-        const json = this.parser.contexts.map(ctx => ({name: ctx.name, boardFile: ctx.boardFile.uri.fsPath, overlays: ctx.overlays.map(o => o.uri.fsPath), board: ctx.board}));
+        const json = dts.parser.contexts.map(ctx => ({name: ctx.name, boardFile: ctx.boardFile.uri.fsPath, overlays: ctx.overlays.map(o => o.uri.fsPath), board: ctx.board}));
         writeFile(uri.fsPath, JSON.stringify(json, null, '\t'), err => {
             if (err) {
                 vscode.window.showErrorMessage('Failed storing config: ' + err);
@@ -344,17 +306,10 @@ class DTSEngine implements
         });
     }
 
-    async activate(ctx: vscode.ExtensionContext) {
-        const timeStart = process.hrtime();
-        const bindingDirs = getBindingDirs();
-        await Promise.all(bindingDirs.map(d => this.types.addFolder(d)));
-        const procTime = process.hrtime(timeStart);
-        console.log(`Found ${Object.keys(this.types.types).length} bindings in ${bindingDirs.join(', ')}. ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
-        await this.loadCtxs();
-        await this.parser.activate(ctx);
+    activate(ctx: vscode.ExtensionContext) {
         this.cSupport.activate(ctx);
 
-        if (this.parser.currCtx?.overlays.length) {
+        if (dts.parser.currCtx?.overlays.length) {
             vscode.commands.executeCommand('setContext', 'devicetree:ctx.hasOverlay', true);
         }
 
@@ -363,9 +318,9 @@ class DTSEngine implements
                 return;
             }
 
-            await this.parser.stable();
+            await dts.parser.stable();
 
-            const ctx = this.parser.ctx(editor.document.uri);
+            const ctx = dts.parser.ctx(editor.document.uri);
             if (!ctx) {
                 return;
             }
@@ -431,7 +386,7 @@ class DTSEngine implements
         vscode.commands.registerCommand('devicetree.save', () => this.saveCtxs(true));
 
         vscode.commands.registerCommand('devicetree.ctx.addShield', () => {
-            if (this.parser.currCtx && vscode.window.activeTextEditor?.document.languageId === 'dts') {
+            if (dts.parser.currCtx && vscode.window.activeTextEditor?.document.languageId === 'dts') {
                 const options = <vscode.OpenDialogOptions>{
                     canSelectFiles: true,
                     openLabel: 'Add shield file',
@@ -441,7 +396,7 @@ class DTSEngine implements
                 };
                 vscode.window.showOpenDialog(options).then(uris => {
                     if (uris) {
-                        this.parser.insertOverlays(...uris).then(() => {
+                        dts.parser.insertOverlays(...uris).then(() => {
                             this.saveCtxs();
                             if (uris.length === 1) {
                                 vscode.window.showInformationMessage(`Added shield overlay ${path.basename(uris[0].fsPath)}.`);
@@ -455,7 +410,7 @@ class DTSEngine implements
         });
 
         vscode.commands.registerCommand('devicetree.ctx.rename', (ctx?: dts.DTSCtx) => {
-            ctx = ctx ?? this.parser.currCtx;
+            ctx = ctx ?? dts.parser.currCtx;
             if (!ctx) {
                 return;
             }
@@ -463,20 +418,20 @@ class DTSEngine implements
             vscode.window.showInputBox({ prompt: 'New DeviceTree context name', value: ctx.name }).then(value => {
                 if (value) {
                     ctx._name = value;
-                    this.treeView.update();
+                    treeView.update();
                     this.saveCtxs();
                 }
             });
         });
 
         vscode.commands.registerCommand('devicetree.ctx.delete', (ctx?: dts.DTSCtx) => {
-            ctx = ctx ?? this.parser.currCtx;
+            ctx = ctx ?? dts.parser.currCtx;
             if (!ctx || !(ctx instanceof dts.DTSCtx)) {
                 return;
             }
 
             const deleteCtx = () => {
-                this.parser.removeCtx(ctx);
+                dts.parser.removeCtx(ctx);
             };
 
             // Only prompt if this context actually took some effort
@@ -492,14 +447,14 @@ class DTSEngine implements
         });
 
         vscode.commands.registerCommand('devicetree.ctx.setBoard', (file?: dts.DTSFile) => {
-            const ctx = file?.ctx ?? this.parser.currCtx;
+            const ctx = file?.ctx ?? dts.parser.currCtx;
             if (!ctx) {
                 return;
             }
 
             zephyr.selectBoard().then(board => {
                 if (board) {
-                    this.parser.setBoard(board, ctx).then(() => {
+                    dts.parser.setBoard(board, ctx).then(() => {
                         this.saveCtxs();
                     });
                 }
@@ -507,7 +462,7 @@ class DTSEngine implements
         });
 
         vscode.commands.registerCommand('devicetree.getMacro', async () => {
-            const ctx = this.parser.currCtx;
+            const ctx = dts.parser.currCtx;
             const selection = vscode.window.activeTextEditor?.selection;
             const uri = vscode.window.activeTextEditor?.document.uri;
             if (!ctx || !selection || !uri) {
@@ -631,7 +586,7 @@ class DTSEngine implements
         });
 
         vscode.commands.registerCommand('devicetree.edit', async () => {
-            const ctx = this.parser.currCtx;
+            const ctx = dts.parser.currCtx;
             const selection = vscode.window.activeTextEditor?.selection;
             const uri = vscode.window.activeTextEditor?.document.uri;
             if (!ctx || !selection || !uri) {
@@ -704,7 +659,7 @@ class DTSEngine implements
         });
 
         vscode.commands.registerCommand('devicetree.goto', async (p: string, uri?: vscode.Uri) => {
-            const ctx = uri ? this.parser.ctx(uri) : this.parser.currCtx;
+            const ctx = uri ? dts.parser.ctx(uri) : dts.parser.currCtx;
 
             let loc: vscode.Location;
             if (p.endsWith('/')) {
@@ -729,7 +684,7 @@ class DTSEngine implements
         this.diagSet = diags;
     }
 
-    addMissing(entry: dts.NodeEntry, propType: types.PropertyType) {
+    addMissing(entry: dts.NodeEntry, propType: PropertyType) {
         if (!vscode.window.activeTextEditor || vscode.window.activeTextEditor.document.uri.fsPath !== entry.loc.uri.fsPath) {
             return;
         }
@@ -778,12 +733,12 @@ class DTSEngine implements
             e.children.forEach(addSymbol);
         };
 
-        this.parser.ctx(document.uri)?.roots.forEach(addSymbol);
+        dts.parser.ctx(document.uri)?.roots.forEach(addSymbol);
         return symbols;
     }
 
     provideWorkspaceSymbols(query: string, token: vscode.CancellationToken): vscode.ProviderResult<vscode.SymbolInformation[]> {
-        const ctx = this.parser.currCtx;
+        const ctx = dts.parser.currCtx;
         if (!ctx) {
             return [];
         }
@@ -826,7 +781,7 @@ class DTSEngine implements
     }
 
     async provideTypeDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Location> {
-        const file = this.parser.file(document.uri);
+        const file = dts.parser.file(document.uri);
         if (!file) {
             return;
         }
@@ -920,7 +875,7 @@ class DTSEngine implements
             return;
         }
 
-        const file = this.parser.file(document.uri);
+        const file = dts.parser.file(document.uri);
         if (!file) {
             return;
         }
@@ -995,7 +950,7 @@ class DTSEngine implements
             });
         }
 
-        const file = this.parser.file(document.uri);
+        const file = dts.parser.file(document.uri);
         if (!file) {
             return;
         }
@@ -1004,7 +959,7 @@ class DTSEngine implements
             const range = document.getWordRangeAtPosition(position, /[\w.,-]+\.ya?ml/);
             const text = document.getText(range);
             if (text) {
-                return Object.values(this.types.types).find(t => t.find(tt => tt.filename.match(new RegExp('.*/' + text)))).map(t => new vscode.Location(vscode.Uri.file(t.filename), new vscode.Position(0, 0)));
+                return Object.values(typeLoader.types).find(t => t.find(tt => tt.filename.match(new RegExp('.*/' + text)))).map(t => new vscode.Location(vscode.Uri.file(t.filename), new vscode.Position(0, 0)));
             }
             return [];
         }
@@ -1040,7 +995,7 @@ class DTSEngine implements
     }
 
     resolveCompletionItem?(item: vscode.CompletionItem, token: vscode.CancellationToken): vscode.ProviderResult<vscode.CompletionItem> {
-        const n = item['dts-node-type'] as types.NodeType;
+        const n = item['dts-node-type'] as NodeType;
         if (n) {
             const isAbsolutePath = n.name?.startsWith('/');
             const parent = item['dts-parent'] as dts.Node;
@@ -1065,7 +1020,7 @@ class DTSEngine implements
                 snippet.appendText(`\tcompatible = "${n.name}";\n`);
             }
 
-            const insertValueSnippet = (p: types.PropertyType, insert?: any) => {
+            const insertValueSnippet = (p: PropertyType, insert?: any) => {
                 let surroundingBraces = [];
                 let defaultVal: string;
                 if (p.type === 'string') {
@@ -1100,7 +1055,7 @@ class DTSEngine implements
             const requiredProps = n.properties.filter(p => p.required && p.name !== 'compatible') ?? [];
             if (requiredProps.length > 0) {
 
-                const defaultGpioController = this.parser.currCtx?.nodeArray().find(node => node.property('gpio-controller'));
+                const defaultGpioController = dts.parser.currCtx?.nodeArray().find(node => node.property('gpio-controller'));
 
                 requiredProps.forEach(p => {
                     snippet.appendText(`\t${p.name}`);
@@ -1168,8 +1123,8 @@ class DTSEngine implements
     }
 
     async provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.CompletionContext): Promise<vscode.CompletionItem[] | vscode.CompletionList> {
-        await this.parser.stable();
-        const file = this.parser.file(document.uri);
+        await dts.parser.stable();
+        const file = dts.parser.file(document.uri);
         if (!file) {
             return;
         }
@@ -1181,9 +1136,9 @@ class DTSEngine implements
         const before = line.slice(0, position.character);
 
         const labelItems = (type: 'node' | 'cell' | 'ref', filter: (node: dts.Node) => boolean = _ => true, prop?: string) => {
-            const labels: {label: string, node: dts.Node, type?: types.NodeType}[] = [];
+            const labels: {label: string, node: dts.Node, type?: NodeType}[] = [];
             file.ctx.nodeArray().filter(filter).forEach(node => {
-                const type = this.types.nodeType(node);
+                const type = typeLoader.nodeType(node);
                 labels.push(...node.labels().map(label => { return { label, node, type }; }));
             });
 
@@ -1233,7 +1188,7 @@ class DTSEngine implements
             }
         }
 
-        const defines = Object.values(this.parser.ctx(document.uri)?.defines ?? {}).map(m => {
+        const defines = Object.values(dts.parser.ctx(document.uri)?.defines ?? {}).map(m => {
             const item = new vscode.CompletionItem(m.name);
             if (m.args) {
                 item.kind = vscode.CompletionItemKind.Function;
@@ -1338,7 +1293,7 @@ class DTSEngine implements
                 }
 
                 if (prop.name === 'compatible') {
-                    return Object.keys(this.types.types).filter(t => !t.startsWith('/')).map(typename => this.types.types[typename].map(type => {
+                    return Object.keys(typeLoader.types).filter(t => !t.startsWith('/')).map(typename => typeLoader.types[typename].map(type => {
                             const completion = new vscode.CompletionItem(typename, vscode.CompletionItemKind.EnumMember);
                             completion.range = range;
                             if (!braces) {
@@ -1398,7 +1353,7 @@ class DTSEngine implements
                 return completion;
             });
 
-        let nodes: types.NodeType[] = Object.values(this.types.types)
+        let nodes: NodeType[] = Object.values(typeLoader.types)
             .filter(n => n[0].name !== '/')
             .reduce((all, n) => [...all, ...n], [])
             .filter(n => n.valid && n.name && (!n.name.startsWith('/') || n.name.startsWith(node.name)));
@@ -1483,7 +1438,7 @@ class DTSEngine implements
     }
 
     provideSignatureHelp(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.SignatureHelpContext): vscode.ProviderResult<vscode.SignatureHelp> {
-        const ctx = this.parser.ctx(document.uri);
+        const ctx = dts.parser.ctx(document.uri);
         if (!ctx) {
             return;
         }
@@ -1649,8 +1604,8 @@ class DTSEngine implements
     }
 
     async provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.DocumentLink[]> {
-        await this.parser.stable();
-        return this.parser.file(document.uri)?.includes.filter(i => i.loc.uri.fsPath === document.uri.fsPath).map(i => {
+        await dts.parser.stable();
+        return dts.parser.file(document.uri)?.includes.filter(i => i.loc.uri.fsPath === document.uri.fsPath).map(i => {
             const link = new vscode.DocumentLink(i.loc.range, i.dst);
             link.tooltip = i.dst.fsPath;
             return link;
@@ -1662,11 +1617,15 @@ export async function activate(
     context: vscode.ExtensionContext
 ): Promise<API> {
     await zephyr.activate(context);
+    await typeLoader.activate(context);
 
     const engine = new DTSEngine();
-    await engine.activate(context);
+    await engine.loadCtxs();
+    await dts.parser.activate(context);
+    engine.activate(context);
+    treeView.activate(context);
 
-    return new API(engine.parser, engine.treeView);
+    return new API();
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function

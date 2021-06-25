@@ -75,14 +75,14 @@ export interface DeviceTree {
      * Create a new context object.
      * A context corresponds to a single application build.
      *
-     * @param boardId Board ID as defined by Zephyr. E.g. nrf52dk_nrf52832
+     * @param boardFile Uri of the board file.
      * @param overlays Array of overlay file uris.
      * @param name Name of this context, or undefined.
      *
      * @returns A DeviceTree context object.
      */
     addContext(
-        boardId: string,
+        boardFile: vscode.Uri,
         overlays?: vscode.Uri[],
         name?: string
     ): Promise<Context>;

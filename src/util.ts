@@ -79,3 +79,55 @@ export function sizeString(size): string {
 
     return (size / spec.size).toString() + ' ' + spec.name;
 }
+
+/**
+ * Basic resettable timer
+ */
+export class Debounce {
+    private timer?: NodeJS.Timer;
+    private cb?: () => any;
+
+    constructor(private time = 1000) {}
+
+    set(cb: () => any) {
+        this.cb = cb;
+        if (this.timer) {
+            clearTimeout(this.timer);
+        }
+
+        setTimeout(() => {
+            this.timer = undefined;
+            this.cb();
+        }, this.time);
+    }
+
+    clear() {
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = undefined;
+        }
+    }
+}
+
+export class Profiler {
+    private start: [number, number];
+    private time: [number, number];
+    constructor() {
+        this.time = process.hrtime();
+        this.start = this.time;
+    }
+
+    private ms(time: [number, number]) {
+        return (time[0] + time[1] / 1e9) * 1000;
+    }
+
+    delta(): number {
+        const delta = process.hrtime(this.time);
+        this.time = process.hrtime(this.time);
+        return this.ms(delta);
+    }
+
+    total(): number {
+        return this.ms(process.hrtime(this.start));
+    }
+}

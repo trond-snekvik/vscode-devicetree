@@ -7,18 +7,17 @@ type CompiledEntity = { start: number, end: number, entity?: dts.Node | dts.Prop
 export class DTSDocumentProvider implements vscode.TextDocumentContentProvider {
     private static readonly COMMAND = 'devicetree.showOutput';
     private readonly INDENT = ' '.repeat(8);
-    private parser: dts.Parser;
     private changeEmitter: vscode.EventEmitter<vscode.Uri>;
     onDidChange: vscode.Event<vscode.Uri>;
     currUri?: vscode.Uri;
 
     entities: CompiledEntity[];
 
-    constructor(parser: dts.Parser) {
+    constructor() {
         this.changeEmitter = new vscode.EventEmitter();
         this.onDidChange = this.changeEmitter.event;
-        this.parser = parser;
-        this.parser.onChange(ctx => {
+
+        dts.parser.onChange(ctx => {
             if (this.currUri && ctx.has(vscode.Uri.file(this.currUri.query))) {
                 this.changeEmitter.fire(this.currUri);
             }
@@ -90,7 +89,7 @@ export class DTSDocumentProvider implements vscode.TextDocumentContentProvider {
 
     provideTextDocumentContent(uri: vscode.Uri, token: vscode.CancellationToken): vscode.ProviderResult<string> {
         this.currUri = uri;
-        const ctx = this.parser.ctx(vscode.Uri.file(uri.query));
+        const ctx = dts.parser.ctx(vscode.Uri.file(uri.query));
         if (!ctx) {
             return `/* Unable to resolve path ${uri.toString()} */`;
         }

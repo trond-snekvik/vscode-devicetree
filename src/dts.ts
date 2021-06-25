@@ -8,8 +8,12 @@ import * as path from 'path';
 import * as zephyr from './zephyr';
 import { Define, preprocess, Defines, ProcessedFile } from './preprocessor';
 import { DiagnosticsSet } from './diags';
-import { NodeType, TypeLoader } from './types';
+import { NodeType, typeLoader, TypeLoader } from './types';
 import { ParserState } from './parser';
+import { hrtime } from 'process';
+import { Debounce } from './util';
+import { config } from './config';
+import { lint, LintCtx } from './lint';
 
 abstract class PropertyValue {
     val: any;
@@ -1178,6 +1182,7 @@ export class DTSCtx {
     _name?: string;
     saved=false;
     external=false;
+    stableTimer = new Debounce(1000);
 
     constructor(public id: number=-1) {
         this.nodes = {};
@@ -1225,11 +1230,11 @@ export class DTSCtx {
 
     async setBoard(board: zephyr.Board) {
         if (board.arch) {
-            this.includes = zephyr.modules.map(module => module + '/dts/' + board.arch);
+            this.includes = zephyr.modules.map(module => vscode.Uri.joinPath(module, 'dts', board.arch).fsPath);
         }
 
         this.board = board;
-        this.boardFile = new DTSFile(vscode.Uri.file(board.path), this);
+        this.boardFile = new DTSFile(board.uri, this);
         this.dirty.push(this.boardFile.uri);
     }
 
@@ -1386,40 +1391,26 @@ export class Parser {
     private boards: { [board: string]: zephyr.Board };
     private appCtx: DTSCtx[];
     private boardCtx: DTSCtx[]; // Raw board contexts, for when the user just opens a .dts or .dtsi file without any overlay
-    private types: TypeLoader;
-    private changeEmitter: vscode.EventEmitter<DTSCtx>;
-    onChange: vscode.Event<DTSCtx>;
-    private openEmitter: vscode.EventEmitter<DTSCtx>;
-    onOpen: vscode.Event<DTSCtx>;
-    private deleteEmitter: vscode.EventEmitter<DTSCtx>;
-    onDelete: vscode.Event<DTSCtx>;
+    private changeEmitter = new vscode.EventEmitter<DTSCtx>();
+    onChange = this.changeEmitter.event;
+    private openEmitter = new vscode.EventEmitter<DTSCtx>();
+    onOpen = this.openEmitter.event;
+    private deleteEmitter = new vscode.EventEmitter<DTSCtx>();
+    onDelete = this.deleteEmitter.event;
+    private stableEmitter = new vscode.EventEmitter<DTSCtx>();
+    onStable = this.stableEmitter.event;
     private _currCtx?: DTSCtx;
     private inDTS: boolean;
     private isStable = true;
     private waiters = new Array<() => void>();
     private nextId=0;
 
-    constructor(defines: {[name: string]: string}, includes: string[], types: TypeLoader) {
-        this.includes = includes;
+    constructor() {
+        this.includes = [];
         this.defines = {};
-        this.types = types;
         this.boards = {};
         this.appCtx = [];
         this.boardCtx = [];
-        this.changeEmitter = new vscode.EventEmitter();
-        this.onChange = this.changeEmitter.event;
-        this.openEmitter = new vscode.EventEmitter();
-        this.onOpen = this.openEmitter.event;
-        this.deleteEmitter = new vscode.EventEmitter();
-        this.onDelete = this.deleteEmitter.event;
-
-        Object.entries(defines).forEach(([name, value]) => this.defines[name] = new Define(name, value));
-
-        zephyr.modules.forEach(m => {
-            this.includes.push(m + '/include');
-            this.includes.push(m + '/dts');
-            this.includes.push(m + '/dts/common');
-        });
     }
 
     file(uri: vscode.Uri) {
@@ -1476,10 +1467,9 @@ export class Parser {
         const ignoredNames = ['app', 'dts', 'prj'];
         let board: zephyr.Board;
         if (!ignoredNames.includes(boardName)) {
-            board = await zephyr.findBoard(boardName);
+            board = zephyr.findBoard(boardName);
             if (board) {
                 this.boards[boardName] = board;
-                console.log(uri.toString() + ': Using board ' + boardName);
                 return board;
             }
         }
@@ -1489,36 +1479,37 @@ export class Parser {
             const options = ['Change default board'];
             vscode.window.showInformationMessage(`Using ${board.name} as a default board.`, ...options).then(async e => {
                 if (e === options[0]) {
-                    zephyr.openConfig('devicetree.defaultBoard');
+                    config.configureSetting('defaultBoard');
                 }
             });
             return board;
         }
-
-        // At this point, the user probably didn't set up their repo correctly, but we'll give them a chance to fix it:
-        return await vscode.window.showErrorMessage('DeviceTree: Unable to find board.', 'Select a board').then(e => {
-            if (e) {
-                return zephyr.selectBoard(); // TODO: Reload context instead of blocking?
-            }
-        });
+        if (zephyr.zephyrRoot) {
+            // At this point, the user probably didn't set up their repo correctly, but we'll give them a chance to fix it:
+            return await vscode.window.showErrorMessage('Unable to find board.', 'Select a board').then(e => {
+                if (e) {
+                    return zephyr.selectBoard(); // TODO: Reload context instead of blocking?
+                }
+            });
+        }
     }
 
     async addContext(board?: vscode.Uri | zephyr.Board, overlays=<vscode.Uri[]>[], name?: string): Promise<DTSCtx> {
         const ctx = new DTSCtx(++this.nextId);
         let boardDoc: vscode.TextDocument;
         if (board instanceof vscode.Uri) {
-            ctx.board = { name: path.basename(board.fsPath, path.extname(board.fsPath)), path: board.fsPath, arch: board.fsPath.match(/boards[/\\]([^./\\]+)/)?.[1] };
-            boardDoc = await vscode.workspace.openTextDocument(board).then(doc => doc, _ => undefined);
+            ctx.board = zephyr.board(board);
+            boardDoc = await vscode.workspace.openTextDocument(ctx.board.uri).then(doc => doc, _ => undefined);
         } else if (board) {
             ctx.board = board;
-            boardDoc = await vscode.workspace.openTextDocument(board.path).then(doc => doc, _ => undefined);
+            boardDoc = await vscode.workspace.openTextDocument(ctx.board.uri).then(doc => doc, _ => undefined);
         } else if (overlays.length) {
             ctx.board = await this.guessOverlayBoard([...overlays].pop());
             if (!ctx.board) {
                 return;
             }
 
-            boardDoc = await vscode.workspace.openTextDocument(ctx.board.path).then(doc => doc, _ => undefined);
+            boardDoc = await vscode.workspace.openTextDocument(ctx.board.uri).then(doc => doc, _ => undefined);
         } else {
             return;
         }
@@ -1530,7 +1521,7 @@ export class Parser {
         // Board specific includes:
         if (ctx.board.arch) {
             // Should this be SOC_DIR based?
-            ctx.includes = zephyr.modules.map(module => module + '/dts/' + ctx.board.arch);
+            ctx.includes = zephyr.modules.map(module => vscode.Uri.joinPath(module, 'dts', ctx.board.arch).fsPath);
         }
 
         ctx.parsing = true;
@@ -1557,6 +1548,7 @@ export class Parser {
         }
 
         this.changeEmitter.fire(ctx);
+        ctx.stableTimer.set(() => this.stableEmitter.fire(ctx));
         return ctx;
     }
 
@@ -1644,6 +1636,7 @@ export class Parser {
         }
 
         this.changeEmitter.fire(ctx);
+        ctx.stableTimer.set(() => this.stableEmitter.fire(ctx));
     }
 
     private async onDidChange(e: vscode.TextDocumentChangeEvent) {
@@ -1685,7 +1678,19 @@ export class Parser {
     }
 
     async activate(ctx: vscode.ExtensionContext) {
-        // ctx.subscriptions.push(vscode.workspace.onDidOpenTextDocument(doc => notActive(() => this.onDidOpen(doc))));
+        const setIncludes = () => {
+            const includes = new Array<string>();
+            zephyr.modules.forEach(m => {
+                includes.push(vscode.Uri.joinPath(m, 'include').fsPath);
+                includes.push(vscode.Uri.joinPath(m, 'dts').fsPath);
+                includes.push(vscode.Uri.joinPath(m, 'dts', 'common').fsPath);
+            });
+            this.includes = includes;
+        };
+
+        setIncludes();
+        ctx.subscriptions.push(zephyr.onChange(() => setIncludes));
+
         ctx.subscriptions.push(vscode.workspace.onDidChangeTextDocument(doc => this.onDidChange(doc)));
         ctx.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(e => this.onDidChangetextEditor(e)));
         ctx.subscriptions.push(vscode.workspace.onDidDeleteFiles(e => e.files.forEach(uri => {
@@ -1709,7 +1714,6 @@ export class Parser {
 
         file.processed = processed;
         let entries = 0;
-        const timeStart = process.hrtime();
         const nodeStack: NodeEntry[] = [];
         let requireSemicolon = false;
         let labels = new Array<string>();
@@ -1966,20 +1970,13 @@ export class Parser {
             state.pushSemicolonAction();
         }
 
-        const procTime = process.hrtime(timeStart);
-
-        console.log(`Parsed ${doc.uri.fsPath} in ${(procTime[0] * 1e9 + procTime[1]) / 1000000} ms`);
-        console.log(`Nodes: ${Object.keys(ctx.nodes).length} entries: ${Object.values(ctx.nodes).reduce((sum, n) => sum + n.entries.length, 0)}`);
-
         // Resolve types:
-        let time = process.hrtime();
         Object.values(ctx.nodes).forEach(node => {
             if (!node.type?.valid) {
-                node.type = this.types.nodeType(node);
+                node.type = typeLoader.nodeType(node);
             }
         });
-        time = process.hrtime(time);
-        console.log(`Resolved types for ${file.uri.fsPath} in ${(time[0] * 1e9 + time[1]) / 1000000} ms`);
+
         file.diags = state.diags;
         return file;
     }
@@ -2020,3 +2017,6 @@ export function cellName(propname: string) {
 export function getPHandleCells(propname: string, parent: Node): Property {
     return parent?.property('#' + cellName(propname));
 }
+
+
+export const parser = new Parser();

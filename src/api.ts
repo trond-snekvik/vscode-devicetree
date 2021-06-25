@@ -6,9 +6,9 @@
 import * as vscode from "vscode";
 import * as dts from "./dts";
 import { DeviceTree, Context, InfoItem, File } from "../api";
-import { DTSTreeView, TreeInfoItem, iconPath } from "./treeView";
-import * as zephyr from "./zephyr";
+import { TreeInfoItem, iconPath, treeView } from "./treeView";
 import { DTSDocumentProvider } from "./compiledOutput";
+import { typeLoader } from "./types";
 
 function packFile(file: dts.DTSFile): File {
     const getIncludes = (uri: vscode.Uri): vscode.Uri[] => {
@@ -64,21 +64,20 @@ export class API implements DeviceTree {
     };
     version = 1;
 
-    constructor(private _parser: dts.Parser, public _treeView: DTSTreeView) {
-        this._parser.onChange((ctx) => this._changeEmitter.fire(packCtx(ctx)));
+    constructor() {
+        dts.parser.onStable(ctx => {
+            this._changeEmitter.fire(packCtx(ctx));
+        });
     }
 
-    async addContext(
-        boardId: string,
-        overlays: vscode.Uri[] = [],
-        name?: string
-    ): Promise<Context> {
-        const board = zephyr.findBoard(boardId);
-        if (!board) {
-            return Promise.reject(`No board named ${boardId}`);
-        }
-
-        const ctx = await this._parser.addContext(board, overlays, name);
+    async addContext(boardUri: vscode.Uri, overlays: vscode.Uri[] = [], name?: string): Promise<Context> {
+        const ctx =
+            dts.parser.contexts.find(
+                ctx =>
+                    ctx.overlays.length === overlays.length &&
+                    ctx.overlays.every(overlay => overlays.find(uri => uri.fsPath === overlay.uri.fsPath)) &&
+                    ctx.board?.uri.fsPath === boardUri.fsPath
+            ) ?? (await dts.parser.addContext(boardUri, overlays, name));
 
         if (ctx) {
             ctx.external = true;
@@ -88,37 +87,41 @@ export class API implements DeviceTree {
         return Promise.reject();
     }
 
+    setWestModules(modules: vscode.Uri[]) {
+        typeLoader.setFolders(modules.map(uri => vscode.Uri.joinPath(uri, 'dts', 'bindings')));
+    }
+
     removeContext(id: number) {
-        const ctx = this._parser.ctx(id);
+        const ctx = dts.parser.ctx(id);
         if (ctx) {
-            this._parser.removeCtx(ctx);
+            dts.parser.removeCtx(ctx);
         }
     }
 
     setOverlays(id: number, overlays: vscode.Uri[]) {
-        const ctx = this._parser.ctx(id);
+        const ctx = dts.parser.ctx(id);
         if (ctx) {
             ctx.setOverlays(overlays);
-            this._parser.reparse(ctx);
+            dts.parser.reparse(ctx);
         }
     }
 
     getContext(id: number): Context | undefined {
-        const ctx = this._parser.ctx(id);
+        const ctx = dts.parser.ctx(id);
         if (ctx) {
             return packCtx(ctx);
         }
     }
 
     getDetails(id: number): InfoItem | undefined {
-        const ctx = this._parser.ctx(id);
+        const ctx = dts.parser.ctx(id);
         if (ctx) {
-            return packInfoItem(this._treeView.details(ctx));
+            return packInfoItem(treeView.details(ctx));
         }
     }
 
     preview(id: number, options?: vscode.TextDocumentShowOptions) {
-        const ctx = this._parser.ctx(id);
+        const ctx = dts.parser.ctx(id);
         if (ctx) {
             DTSDocumentProvider.open(ctx, options);
         }

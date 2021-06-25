@@ -5,7 +5,7 @@
  */
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { DTSCtx, DTSFile, Node, Parser, PHandle, Property} from './dts';
+import { DTSCtx, DTSFile, Node, parser, PHandle, Property} from './dts';
 import { countText, sizeString } from './util';
 import { resolveBoardInfo } from './zephyr';
 
@@ -24,6 +24,7 @@ export class TreeInfoItem {
     path?: string;
     description?: string;
     tooltip?: string;
+    loc?: vscode.Location;
     private _children: TreeInfoItem[];
 
     constructor(
@@ -76,7 +77,13 @@ export class TreeInfoItem {
             item.tooltip = this.tooltip;
         }
 
-        if (this.path) {
+        if (this.loc) {
+            item.command = {
+                command: 'vscode.open',
+                title: 'Show',
+                arguments: [this.loc.uri, { selection: this.loc.range } as vscode.TextDocumentShowOptions],
+            };
+        } else if (this.path) {
             item.command = {
                 command: "devicetree.goto",
                 title: "Show",
@@ -93,32 +100,30 @@ type DTSTreeItem = DTSCtx | DTSFile | NestedInclude | TreeInfoItem;
 
 export class DTSTreeView implements
     vscode.TreeDataProvider<DTSTreeItem> {
-    parser: Parser;
     treeView: vscode.TreeView<DTSTreeItem>;
-    private treeDataChange: vscode.EventEmitter<void | DTSCtx>;
-    onDidChangeTreeData: vscode.Event<void | DTSCtx>;
+    private treeDataChange = new vscode.EventEmitter<void | DTSCtx>();
+    onDidChangeTreeData = this.treeDataChange.event;
 
-    constructor(parser: Parser) {
-        this.parser = parser;
-
-        this.treeDataChange = new vscode.EventEmitter<void | DTSCtx>();
-        this.onDidChangeTreeData = this.treeDataChange.event;
-
-        this.parser.onChange(ctx => this.treeDataChange.fire());
-        this.parser.onDelete(ctx => this.treeDataChange.fire());
+    activate(ctx: vscode.ExtensionContext) {
+        ctx.subscriptions.push(parser.onChange(() => this.treeDataChange.fire()));
+        ctx.subscriptions.push(parser.onStable(() => this.treeDataChange.fire()));
+        ctx.subscriptions.push(parser.onDelete(() => this.treeDataChange.fire()));
 
         this.treeView = vscode.window.createTreeView('trond-snekvik.devicetree.ctx', {showCollapseAll: true, canSelectMany: false, treeDataProvider: this});
+        ctx.subscriptions.push(this.treeView);
 
-        vscode.window.onDidChangeActiveTextEditor(e => {
-            if (!e || !this.treeView.visible || !e.document) {
-                return;
-            }
+        ctx.subscriptions.push(
+            vscode.window.onDidChangeActiveTextEditor(e => {
+                if (!e || !this.treeView.visible || !e.document) {
+                    return;
+                }
 
-            const file = this.parser.file(e.document.uri);
-            if (file) {
-                this.treeView.reveal(file);
-            }
-        });
+                const file = parser.file(e.document.uri);
+                if (file) {
+                    this.treeView.reveal(file);
+                }
+            })
+        );
     }
 
     update() {
@@ -133,7 +138,7 @@ export class DTSTreeView implements
     }
 
     async getTreeItem(element: DTSTreeItem): Promise<vscode.TreeItem> {
-        await this.parser.stable();
+        await parser.stable();
         try {
             if (element instanceof DTSCtx) {
                 let file: DTSFile;
@@ -148,7 +153,7 @@ export class DTSTreeView implements
                 }
 
                 const item = new vscode.TreeItem(element.name,
-                    this.parser.currCtx === element ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+                    parser.currCtx === element ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
                 item.contextValue = 'devicetree.ctx';
                 item.tooltip = 'DeviceTree Context';
                 item.id = ['devicetree', 'ctx', element.name, 'file', file.uri.fsPath.replace(/[/\\]/g, '.')].join('.');
@@ -204,7 +209,7 @@ export class DTSTreeView implements
         try {
             if (!element) {
                 /* Ignore external contexts, these will show up in the external extension's view: */
-                return this.parser.contexts.filter(ctx => !ctx.external);
+                return parser.contexts.filter(ctx => !ctx.external);
             }
 
             if (element instanceof DTSCtx) {
@@ -313,7 +318,7 @@ export class DTSTreeView implements
     private flashOverview(ctx: DTSCtx) {
         const flash = new TreeInfoItem(ctx, 'Flash', 'flash');
         ctx.nodeArray()
-            .filter(n => n.parent && n.type.is('fixed-partitions'))
+            .filter(n => n.parent && n.type?.is('fixed-partitions'))
             .forEach((n, _, all) => {
                 let parent = flash;
                 if (all.length > 1) {
@@ -328,7 +333,7 @@ export class DTSTreeView implements
                 }
 
                 parent.path = n.parent.path;
-                parent.tooltip = n.type?.description;
+                parent.tooltip = n.type!.description;
 
                 let offset = 0;
                 n.children().filter(c => c.regs()?.[0]?.addrs.length === 1).sort((a, b) => (a.regs()[0].addrs[0]?.val ?? 0) - (b.regs()[0].addrs[0]?.val ?? 0)).forEach(c => {
@@ -419,7 +424,7 @@ export class DTSTreeView implements
         });
 
         controllerItems.filter(c => c.children.length).forEach((controller, i) => {
-            const cells = controllers[i]?.type.cells('interrupt') as string[];
+            const cells = controllers[i]?.type?.cells('interrupt') as string[];
             controller.children.sort((a, b) => a.interrupts.array?.[0] - b.interrupts.array?.[0]).forEach(child => {
                 const childIrqs = child.interrupts.arrays;
                 const irqNames = child.node.property('interrupt-names')?.stringArray;
@@ -465,12 +470,12 @@ export class DTSTreeView implements
         const buses = new TreeInfoItem(ctx, 'Buses', 'bus');
         ctx.nodeArray().filter(node => node.type?.bus).forEach(node => {
             const bus = new TreeInfoItem(ctx, node.uniqueName, undefined, '');
-            if (!bus.name.toLowerCase().includes(node.type.bus.toLowerCase())) {
-                bus.description = node.type.bus + ' ';
+            if (!bus.name.toLowerCase().includes(node.type!.bus.toLowerCase())) {
+                bus.description = node.type!.bus + ' ';
             }
 
             bus.path = node.path;
-            bus.tooltip = node.type?.description;
+            bus.tooltip = node.type!.description;
 
             const busProps = [/.*-speed$/, /.*-pin$/, /^clock-frequency$/, /^hw-flow-control$/, /^dma-channels$/];
             node.uniqueProperties().filter(prop => prop.value.length > 0 && busProps.some(regex => prop.name.match(regex))).forEach(prop => {
@@ -490,7 +495,7 @@ export class DTSTreeView implements
                     busEntry.description = `@ 0x${child.address.toString(16)}`;
 
                     // SPI nodes have chip selects
-                    if (node.type.bus === 'spi') {
+                    if (node.type?.bus === 'spi') {
                         const csGpios = node.property('cs-gpios');
                         const cs = csGpios?.entries?.[child.address];
                         if (cs) {
@@ -602,6 +607,34 @@ export class DTSTreeView implements
         }
     }
 
+    private issuesOverview(ctx: DTSCtx) {
+        const diags = ctx.getDiags();
+        const root = new TreeInfoItem(ctx, 'Issues', 'issues');
+        diags.all.forEach(set => {
+            const icon = (severity: vscode.DiagnosticSeverity): string => {
+                switch (severity) {
+                    case vscode.DiagnosticSeverity.Error:
+                        return 'error';
+                    case vscode.DiagnosticSeverity.Warning:
+                        return 'warning';
+                    case vscode.DiagnosticSeverity.Information:
+                        return 'info';
+                    default:
+                        return '';
+                }
+            };
+            set.diags.forEach(diag => {
+                const item = new TreeInfoItem(ctx, diag.message, icon(diag.severity), path.basename(set.uri.fsPath));
+                item.loc = new vscode.Location(set.uri, diag.range);
+                root.addChild(item);
+            });
+        });
+
+        root.description = `(${root.children.length})`;
+
+        return root;
+    }
+
     details(ctx: DTSCtx): TreeInfoItem {
         const details = new TreeInfoItem(ctx, 'Overview');
         details.addChild(this.boardOverview(ctx));
@@ -612,6 +645,7 @@ export class DTSTreeView implements
         details.addChild(this.ioChannelOverview('ADC', ctx));
         details.addChild(this.ioChannelOverview('DAC', ctx));
         details.addChild(this.clockOverview(ctx));
+        details.addChild(this.issuesOverview(ctx));
         return details;
     }
 
@@ -631,3 +665,4 @@ export class DTSTreeView implements
     }
 }
 
+export const treeView = new DTSTreeView();

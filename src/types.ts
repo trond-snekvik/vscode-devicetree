@@ -9,7 +9,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { readFile } from 'fs';
 import { Node } from './dts';
-import { DiagnosticsSet } from './diags';
+import * as zephyr from './zephyr';
 
 export interface PropertyType {
     name: string;
@@ -468,8 +468,8 @@ const standardTypes = [
 ];
 
 export class TypeLoader {
-    types: {[name: string]: NodeType[]};
-    folders: string[] = []
+    types: { [name: string]: NodeType[] };
+    folders: vscode.Uri[] = [];
     diags: vscode.DiagnosticCollection;
     baseType: NodeType;
 
@@ -478,6 +478,13 @@ export class TypeLoader {
         this.baseType = new AbstractNodeType({ name: '<unknown>', properties: { ...standardProperties } });
         this.types = {};
         standardTypes.forEach(type => this.addType(type));
+    }
+
+    async activate(ctx: vscode.ExtensionContext) {
+        const setFolders = () => this.setFolders(zephyr.modules.map(module => vscode.Uri.joinPath(module, 'dts', 'bindings')));
+
+        await setFolders();
+        ctx.subscriptions.push(zephyr.onChange(setFolders));
     }
 
     private addType(type: NodeType) {
@@ -490,39 +497,68 @@ export class TypeLoader {
         type.setLoader(this);
     }
 
-    async addFolder(folder: string) {
-        this.folders.push(folder);
-        const g = glob.sync('**/*.yaml', { cwd: folder, ignore: 'test/*' });
-        return Promise.all(g.map(file => new Promise<void>(resolve => {
-            const filePath = path.resolve(folder, file);
-            readFile(filePath, 'utf-8', (err, out) => {
-                if (err) {
-                    console.log(`Couldn't open ${file}`);
-                } else {
-                    try {
-                        const tree = yaml.load(out, { json: true });
-                        this.addType(new NodeType({ name: path.basename(file, '.yaml'), ...tree }, filePath));
-                    } catch (e) {
-                        const pos =
-                            "mark" in e
-                                ? new vscode.Position(
-                                      e.mark.line - 1,
-                                      e.mark.column
-                                  )
-                                : new vscode.Position(0, 0);
-                        this.diags.set(vscode.Uri.file(filePath), [
-                            new vscode.Diagnostic(
-                                new vscode.Range(pos, pos),
-                                `Invalid type definition: ${e.message ?? e}`,
-                                vscode.DiagnosticSeverity.Error
-                            ),
-                        ]);
-                    }
-                }
+    async addFolder(folder: vscode.Uri) {
+        if (this.folders.some(existing => existing.fsPath === folder.fsPath)) {
+            return;
+        }
 
-                resolve();
-            });
-        })));
+        this.folders.push(folder);
+        const g = glob.sync('**/*.yaml', { cwd: folder.fsPath, ignore: 'test/*' });
+        return Promise.all(
+            g.map(
+                file =>
+                    new Promise<void>(resolve => {
+                        const filePath = path.resolve(folder.fsPath, file);
+                        readFile(filePath, 'utf-8', (err, out) => {
+                            if (!err) {
+                                try {
+                                    const tree = yaml.load(out, { json: true });
+                                    this.addType(new NodeType({ name: path.basename(file, '.yaml'), ...tree }, filePath));
+                                } catch (e) {
+                                    const pos =
+                                        'mark' in e
+                                            ? new vscode.Position(e.mark.line - 1, e.mark.column)
+                                            : new vscode.Position(0, 0);
+                                    this.diags.set(vscode.Uri.file(filePath), [
+                                        new vscode.Diagnostic(
+                                            new vscode.Range(pos, pos),
+                                            `Invalid type definition: ${e.message ?? e}`,
+                                            vscode.DiagnosticSeverity.Error
+                                        ),
+                                    ]);
+                                }
+                            }
+
+                            resolve();
+                        });
+                    })
+            )
+        );
+    }
+
+    removeFolders(uris: vscode.Uri[]) {
+        if (uris.length === 0) {
+            return;
+        }
+
+        const newTypes = {};
+        Object.entries(this.types).forEach(([name, entries]) => {
+            const newEntries = entries.filter(
+                entry => !entry.filename || !uris.every(uri => path.relative(uri.fsPath, entry.filename).startsWith('..'))
+            );
+            if (newEntries.length > 0) {
+                newTypes[name] = newEntries;
+            }
+        });
+
+        this.types = newTypes;
+    }
+
+    async setFolders(uris: vscode.Uri[]) {
+        const removedFolders = this.folders.filter(folder => !uris.some(uri => uri.fsPath === folder.fsPath));
+        this.removeFolders(removedFolders);
+        const addedFolders = uris.filter(uri => !this.folders.some(folder => uri.fsPath === folder.fsPath));
+        await Promise.all(addedFolders.map(uri => this.addFolder(uri)));
     }
 
     get(name: string): NodeType[] {

@@ -203,41 +203,37 @@
                 "contents": "DeviceTree context view:\n\nWhen you open a DeviceTree file, it will show up here, along with information about its board and configuration."
             }
         ],
-        "configuration": [
-            {
-                "title": "DeviceTree",
-                "properties": {
-                    "devicetree.bindings": {
-                        "type": "array",
-                        "description": "List of directories containing binding descriptors. Relative paths are executed from each workspace. Defaults to dts/bindings",
-                        "default": [
-                            "${zephyrBase}/dts/bindings",
-                            "${zephyrBase}/../nrf/dts/bindings"
-                        ],
-                        "scope": "machine"
-                    },
-                    "devicetree.west": {
-                        "type": "string",
-                        "description": "Path to the West executable",
-                        "scope": "machine"
-                    },
-                    "devicetree.zephyr": {
-                        "type": "string",
-                        "description": "Path to the Zephyr repo",
-                        "scope": "machine"
-                    },
-                    "devicetree.ctxFile": {
-                        "type": "string",
-                        "description": "File to store contexts in",
-                        "scope": "machine"
-                    },
-                    "devicetree.defaultBoard": {
-                        "type": "string",
-                        "description": "Default DeviceTree board when overlay file has a generic name"
-                    }
+        "configuration": {
+            "type": "object",
+            "title": "DeviceTree",
+            "properties": {
+                "devicetree.modules": {
+                    "type": "array",
+                    "description": "List of directories containing binding descriptors. Relative paths are executed from each workspace. Defaults to dts/bindings",
+                    "default": [
+                        "${zephyrBase}",
+                        "${zephyrBase}/../nrf",
+                        "."
+                    ],
+                    "items": "string",
+                    "scope": "machine"
+                },
+                "devicetree.zephyr": {
+                    "type": "string",
+                    "description": "Path to the Zephyr repo",
+                    "scope": "machine"
+                },
+                "devicetree.ctxFile": {
+                    "type": "string",
+                    "description": "File to store contexts in",
+                    "scope": "machine"
+                },
+                "devicetree.defaultBoard": {
+                    "type": "string",
+                    "description": "Default DeviceTree board when overlay file has a generic name"
                 }
             }
-        ],
+        },
         "yamlValidation": [
             {
                 "fileMatch": "dts/bindings/**/*.yaml",

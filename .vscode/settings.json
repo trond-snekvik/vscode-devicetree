@@ -12,4 +12,5 @@
     "eslint.format.enable": true,
     "eslint.lintTask.enable": true,
     "prettier.tabWidth": 4,
+    "python.pythonPath": "/bin/python",
 }

@@ -607,34 +607,6 @@ export class DTSTreeView implements
         }
     }
 
-    private issuesOverview(ctx: DTSCtx) {
-        const diags = ctx.getDiags();
-        const root = new TreeInfoItem(ctx, 'Issues', 'issues');
-        diags.all.forEach(set => {
-            const icon = (severity: vscode.DiagnosticSeverity): string => {
-                switch (severity) {
-                    case vscode.DiagnosticSeverity.Error:
-                        return 'error';
-                    case vscode.DiagnosticSeverity.Warning:
-                        return 'warning';
-                    case vscode.DiagnosticSeverity.Information:
-                        return 'info';
-                    default:
-                        return '';
-                }
-            };
-            set.diags.forEach(diag => {
-                const item = new TreeInfoItem(ctx, diag.message, icon(diag.severity), path.basename(set.uri.fsPath));
-                item.loc = new vscode.Location(set.uri, diag.range);
-                root.addChild(item);
-            });
-        });
-
-        root.description = `(${root.children.length})`;
-
-        return root;
-    }
-
     details(ctx: DTSCtx): TreeInfoItem {
         const details = new TreeInfoItem(ctx, 'Overview');
         details.addChild(this.boardOverview(ctx));
@@ -645,7 +617,6 @@ export class DTSTreeView implements
         details.addChild(this.ioChannelOverview('ADC', ctx));
         details.addChild(this.ioChannelOverview('DAC', ctx));
         details.addChild(this.clockOverview(ctx));
-        details.addChild(this.issuesOverview(ctx));
         return details;
     }
 

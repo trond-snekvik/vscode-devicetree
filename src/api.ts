@@ -9,6 +9,7 @@ import { DeviceTree, Context, InfoItem, File } from "../api";
 import { TreeInfoItem, iconPath, treeView } from "./treeView";
 import { DTSDocumentProvider } from "./compiledOutput";
 import { typeLoader } from "./types";
+import * as zephyr from './zephyr';
 
 function packFile(file: dts.DTSFile): File {
     const getIncludes = (uri: vscode.Uri): vscode.Uri[] => {
@@ -87,8 +88,8 @@ export class API implements DeviceTree {
         return Promise.reject();
     }
 
-    setWestModules(modules: vscode.Uri[]) {
-        typeLoader.setFolders(modules.map(uri => vscode.Uri.joinPath(uri, 'dts', 'bindings')));
+    setZephyrBase(uri: vscode.Uri) {
+        return zephyr.setZephyrBase(uri);
     }
 
     removeContext(id: number) {

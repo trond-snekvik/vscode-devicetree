@@ -72,6 +72,13 @@ export interface DeviceTree {
     version: number;
 
     /**
+     * Set Zephyr base directory to use.
+     *
+     * @param uri New Zephyr base
+     */
+    setZephyrBase(uri: vscode.Uri): Promise<void>;
+
+    /**
      * Create a new context object.
      * A context corresponds to a single application build.
      *

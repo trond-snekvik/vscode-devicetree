@@ -267,11 +267,11 @@
         "eslint-config-airbnb-base": "^14.2.0",
         "eslint-plugin-import": "^2.22.0",
         "mocha": "^6.1.4",
-        "ts-loader": "^8.0.0",
+        "ts-loader": "^8.4.0",
         "typescript": "^3.7.2",
         "vscode-test": "1.4.0",
         "webpack": "^5.36.1",
-        "webpack-cli": "^3.3.12"
+        "webpack-cli": "^5.0.1"
     },
     "dependencies": {
         "glob": "7.1.6",
